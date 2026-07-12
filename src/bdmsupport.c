@@ -585,7 +585,7 @@ static int bdmGetImage(item_list_t *itemList, char *folder, int isRelative, char
         snprintf(path, sizeof(path), "%s%s/%s_%s", pDeviceData->bdmPrefix, folder, value, suffix);
     else
         snprintf(path, sizeof(path), "%s%s_%s", folder, value, suffix);
-    return texDiscoverLoad(resultTex, path, -1);
+    return texDiscoverLoadPsm(resultTex, path, -1, psm);
 }
 
 static int bdmGetTextId(item_list_t *itemList)

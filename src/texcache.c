@@ -37,7 +37,7 @@ static void cacheLoadImage(void *data)
     GSTEXTURE *texture = &req->entry->texture;
     texFree(texture);
 
-    if (handler->itemGetImage(handler, req->cache->prefix, req->cache->isPrefixRelative, req->value, req->cache->suffix, texture, GS_PSM_CT24) < 0)
+    if (handler->itemGetImage(handler, req->cache->prefix, req->cache->isPrefixRelative, req->value, req->cache->suffix, texture, req->cache->psm) < 0)
         req->entry->lastUsed = 0;
     else
         req->entry->lastUsed = guiFrameId;
@@ -94,6 +94,7 @@ image_cache_t *cacheInitCache(int userId, const char *prefix, int isPrefixRelati
     cache->suffix = (char *)malloc(length * sizeof(char));
     memcpy(cache->suffix, suffix, length);
     cache->nextUID = 1;
+    cache->psm = GS_PSM_CT24; // native size, as every existing element expects
     cache->content = (cache_entry_t *)malloc(count * sizeof(cache_entry_t));
 
     int i;

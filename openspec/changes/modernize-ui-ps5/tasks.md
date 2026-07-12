@@ -53,22 +53,28 @@ Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. E
 
 ## 5. Elementos de tema
 
-- [ ] 5.1 Añadir `FrostedPanel` **al final** de `elementsType[]` (no reordenar) con su `init`/`draw`.
-- [ ] 5.2 Añadir `CardShelf` igual: fila horizontal, foco que crece y se eleva, no enfocadas atenuadas.
+- [x] 5.1 `FrostedPanel` añadido **al final** de `elementsType[]`, sin reordenar nada. Un solo `rmBlurBackdrop()` por frame aunque el tema ponga varios paneles (guardado con `guiFrameId`).
+- [x] 5.2 `CardShelf`: fila horizontal, el foco crece y se eleva, las no enfocadas se atenúan. El crecimiento y la elevación salen de la proximidad al foco **animado** (`uiApproach`), no al índice seleccionado — por eso suavizan en vez de saltar al cambiar de selección. Las no enfocadas se atenúan modulando el color (0x80 es el neutro del GS), así que no hace falta dibujar ningún borde.
 - [x] 5.3 **Reescalador de portadas en el EE**: `texLoadCover()` en `textures.c`. Filtro de caja a un tile fijo de 128×192 CT16 (48 KiB). La imagen nativa **nunca se llega a asignar como GSTEXTURE**, así que no puede subir a VRAM ni transitoriamente.
 
   **Decisión de implementación:** el filtro corre sobre las filas RGBA que devuelve libpng, **no sobre el `Mem` de una GSTEXTURE ya empaquetada**. Empaquetar es específico del GS —el T8 guarda la CLUT swizzleada y el T4 intercambia los nibbles— y filtrar ahí obligaría a deshacer las dos cosas. Por las filas de libpng, un solo camino sirve para CT32, CT24, gris y paleta.
 
   El caché sale gratis: las portadas ya pasan por `image_cache_t` (`texcache.c`), que cachea por entrada. Lo consumirá el `CardShelf` en 5.3b.
-- [ ] 5.3b `CardShelf` consume esos tiles. Reserva con el título cuando no haya portada.
-- [ ] 5.4 Culling: dibujar sólo las tarjetas visibles o adyacentes.
+- [x] 5.3b `CardShelf` consume esos tiles, y dibuja una reserva con el título cuando aún no hay portada (las portadas entran por el hilo de IO, así que la fila no debe encogerse mientras llegan).
+
+  **Cómo pide los tiles:** `image_cache_t` gana un campo `psm`. `GS_PSM_CT24` (el valor por defecto) significa «carga a tamaño nativo», que es lo que quiere todo elemento existente; `GS_PSM_CT16` pide el tile reescalado. Los tres backends (`bdm`/`eth`/`hdd`) ya recibían un `psm` que **ignoraban**: ahora lo propagan a `texDiscoverLoadPsm()`.
+
+  **El `CardShelf` tiene caché propia, a propósito.** `initMutableImage()` deduplica cachés por patrón de arte, y un `ItemCover` en el mismo tema también usa `"COV"`. Compartirla mandaría a uno de los dos por el cargador equivocado: o el shelf recibiría portadas a tamaño nativo (justo lo que no cabe), o el `ItemCover` recibiría tiles de 128×192.
+- [x] 5.4 Culling: sólo se recorre la página que OPL ya calcula (`menu->item->pagestart`), nunca la lista entera. Una biblioteca puede tener cientos de títulos; el shelf enseña un puñado.
 - [ ] 5.5 **Regresión:** cargar un tema antiguo y confirmar que renderiza idéntico y que no reserva VRAM de blur.
+
+  **Resuelto en el código, falta confirmarlo:** `rmBlurInit()` **ya no reserva nada**. El modo de vídeo se fija *antes* de cargar el tema (`opl.c`, `applyConfig`), así que en ese punto es imposible saber si habrá algún panel de cristal. La cadena se reclama **en el primer `rmBlurBackdrop()`**, de modo que un tema que no dibuja cristal nunca entra ahí y nunca paga los 224 KiB. Se comprueba mirando `KiB TEXMAN` en el overlay: con un tema antiguo debe seguir en **1856**, no en 1632.
 
 **Verificable:** un tema de prueba con los dos elementos nuevos, más un tema antiguo intacto.
 
 ## 6. Tema PS5
 
-- [ ] 6.1 `themes/PS5/conf_theme.cfg` componiendo `CardShelf` + `FrostedPanel`.
+- [x] 6.1 `themes/PS5/conf_theme.cfg` componiendo `CardShelf` + `FrostedPanel`. **El orden importa y no es cosmético:** `FrostedPanel` desenfoca lo que ya se haya dibujado en el frame, así que el fondo va antes del panel y el shelf después, para quedar nítido encima del cristal.
 - [ ] 6.2 Wallpaper = portada enfocada, a pantalla completa, desenfocada, con velo en degradado para garantizar contraste del texto.
 - [ ] 6.3 Transición del wallpaper al cambiar de foco.
 - [ ] 6.4 No hacerlo el tema por defecto.

@@ -771,7 +771,7 @@ int texLoadInternal(GSTEXTURE *texture, int texId)
     return texLoadAll(texture, NULL, texId);
 }
 
-int texDiscoverLoad(GSTEXTURE *texture, const char *path, int texId)
+int texDiscoverLoadPsm(GSTEXTURE *texture, const char *path, int texId, short psm)
 {
     char filePath[256];
 
@@ -786,8 +786,20 @@ int texDiscoverLoad(GSTEXTURE *texture, const char *path, int texId)
     if (fd > 0) {
         // File found, load it
         close(fd);
+
+        // CT16 is how a cache asks for the fixed-size cover tile instead of the
+        // native-resolution image. Only the card shelf does; everything else
+        // keeps the old path byte for byte.
+        if (psm == GS_PSM_CT16)
+            return (texLoadCover(texture, filePath) >= 0) ? 0 : ERR_BAD_FILE;
+
         return (texLoad(texture, filePath) >= 0) ? 0 : ERR_BAD_FILE;
     }
 
     return ERR_BAD_FILE;
+}
+
+int texDiscoverLoad(GSTEXTURE *texture, const char *path, int texId)
+{
+    return texDiscoverLoadPsm(texture, path, texId, GS_PSM_CT24);
 }

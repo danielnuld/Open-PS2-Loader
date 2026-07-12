@@ -3,6 +3,7 @@
 #include "include/util.h"
 #include "include/gui.h"
 #include "include/renderman.h"
+#include "include/uianim.h"
 #include "include/textures.h"
 #include "include/ioman.h"
 #include "include/fntsys.h"
@@ -48,6 +49,12 @@ enum ELEM_ATTRIBUTE_TYPE {
     ELEM_TYPE_LOADING_ICON,
     ELEM_TYPE_BDM_INDEX,
     ELEM_TYPE_GAME_COUNT_TEXT,
+    // New types go at the END, and nothing above is reordered. A theme that
+    // does not name them never instantiates them, reserves no blur VRAM, and
+    // renders exactly as before. That is also the condition for this being
+    // upstreamable: a UI rewrite never merges, an additive element type does.
+    ELEM_TYPE_FROSTED_PANEL,
+    ELEM_TYPE_CARD_SHELF,
     ELEM_TYPE_COUNT
 };
 
@@ -76,7 +83,9 @@ static const char *elementsType[ELEM_TYPE_COUNT] = {
     "InfoHintText",
     "LoadingIcon",
     "BdmIndex",
-    "GameCountText"};
+    "GameCountText",
+    "FrostedPanel",
+    "CardShelf"};
 
 // Common functions for Text ////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1007,6 +1016,216 @@ static void validateGUIElems(const char *themePath, config_set_t *themeConfig, t
     validateItemsList(themePath, themeConfig, theme, theme->appsItemsList, &theme->appsMainElems);
 }
 
+// FrostedPanel /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/* The blur is a whole-frame operation, but a theme may place several glass
+   panels. Blur once, on whichever panel draws first this frame, and let the
+   rest sample the same chain. */
+static int frostedBlurFrame = -1;
+
+static void frostedEnsureBackdrop(void)
+{
+    if (frostedBlurFrame != guiFrameId) {
+        frostedBlurFrame = guiFrameId;
+        rmBlurBackdrop();
+    }
+}
+
+static void drawFrostedPanel(struct menu_list *menu, struct submenu_list *item, config_set_t *config, struct theme_element *elem)
+{
+    int x = elem->posX;
+    int y = elem->posY;
+
+    if (elem->aligned & ALIGN_HCENTER)
+        x -= elem->width >> 1;
+    else if (elem->aligned & ALIGN_RIGHT)
+        x -= elem->width;
+
+    if (elem->aligned & ALIGN_VCENTER)
+        y -= elem->height >> 1;
+    else if (elem->aligned & ALIGN_BOTTOM)
+        y -= elem->height;
+
+    frostedEnsureBackdrop();
+
+    // Safe even with no blur: rmDrawFrosted degrades to just the tint.
+    rmDrawFrosted(x, y, elem->width, elem->height, elem->color);
+}
+
+// CardShelf ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define SHELF_MAX_CARDS 16
+
+typedef struct
+{
+    image_cache_t *cache;
+
+    int cardWidth;
+    int cardHeight;
+    int spacing;
+    int lift;         // how far the focused card rises, in pixels
+    float focusScale; // how much bigger the focused card gets
+
+    float focus; // animated position of the focus, in card slots
+    int focusInit;
+} card_shelf_t;
+
+static void drawCardShelf(struct menu_list *menu, struct submenu_list *item, config_set_t *config, struct theme_element *elem)
+{
+    if (!item)
+        return;
+
+    card_shelf_t *shelf = (card_shelf_t *)elem->extended;
+    const int stride = shelf->cardWidth + shelf->spacing;
+
+    if (stride <= 0)
+        return;
+
+    int visible = (elem->width / stride) + 1;
+
+    if (visible > SHELF_MAX_CARDS)
+        visible = SHELF_MAX_CARDS;
+    if (visible <= 0)
+        return;
+
+    /* Culling: walk only the page OPL already computed, never the whole list.
+       A library can hold hundreds of titles; the shelf shows a handful. */
+    submenu_list_t *walk = menu->item->pagestart;
+    int selected = -1;
+
+    for (int n = 0; walk && n < visible; n++, walk = walk->next) {
+        if (walk == item)
+            selected = n;
+    }
+
+    if (selected < 0)
+        selected = 0;
+
+    /* Chase the selection rather than snapping to it. uiApproach is time-based,
+       so the slide lasts the same wall-clock time at PAL's 50 Hz as at 60 Hz. */
+    if (!shelf->focusInit) {
+        shelf->focus = (float)selected;
+        shelf->focusInit = 1;
+    } else {
+        shelf->focus = uiApproach(shelf->focus, (float)selected, 12.0f, uiAnimDelta());
+    }
+
+    int baseX = elem->posX;
+    int baseY = elem->posY;
+
+    if (elem->aligned & ALIGN_HCENTER)
+        baseX -= elem->width >> 1;
+    if (elem->aligned & ALIGN_VCENTER)
+        baseY -= elem->height >> 1;
+
+    walk = menu->item->pagestart;
+
+    for (int i = 0; i < visible && walk; i++, walk = walk->next) {
+        /* Proximity to the ANIMATED focus, not to the selected index: 1 on the
+           focused card, 0 once a full slot away. Driving the growth and the
+           lift from this is what makes them ease instead of snapping when the
+           selection changes. */
+        float d = shelf->focus - (float)i;
+
+        if (d < 0.0f)
+            d = -d;
+
+        float prox = 1.0f - d;
+
+        if (prox < 0.0f)
+            prox = 0.0f;
+
+        const float scale = 1.0f + (shelf->focusScale - 1.0f) * prox;
+
+        const int w = (int)((float)shelf->cardWidth * scale);
+        const int h = (int)((float)shelf->cardHeight * scale);
+
+        // Grow about the centre, and rise.
+        const int cx = baseX + (i * stride) + (shelf->cardWidth >> 1);
+        const int cy = baseY + (shelf->cardHeight >> 1) - (int)((float)shelf->lift * prox);
+
+        GSTEXTURE *cover = getGameImageTexture(shelf->cache, menu->item->userdata, &walk->item);
+
+        if (cover && cover->Mem) {
+            /* Dim the unfocused cards. The focused one then reads as focused on
+               brightness alone, with no border to draw. 0x80 is the neutral of
+               the GS modulate, so the focused card is left untouched. */
+            const u32 shade = 0x60 + (u32)(0x20 * prox);
+            const u64 tint = GS_SETREG_RGBA(shade, shade, shade, 0x80);
+
+            rmDrawPixmap(cover, cx, cy, ALIGN_CENTER, w, h, elem->scaled, tint);
+        } else {
+            /* No art yet: hold the slot with a plate and the title, so the row
+               keeps its shape while covers stream in on the IO thread. */
+            rmDrawRect(cx - (w >> 1), cy - (h >> 1), w, h, gColDarker);
+            fntRenderString(elem->font, cx, cy, ALIGN_CENTER, w, h, submenuItemGetText(&walk->item), elem->color);
+        }
+    }
+}
+
+static void endCardShelf(struct theme_element *elem)
+{
+    card_shelf_t *shelf = (card_shelf_t *)elem->extended;
+
+    if (shelf) {
+        if (shelf->cache)
+            cacheDestroyCache(shelf->cache);
+
+        free(shelf);
+        elem->extended = NULL;
+    }
+}
+
+static void initCardShelf(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_element_t *elem, const char *name)
+{
+    card_shelf_t *shelf = (card_shelf_t *)malloc(sizeof(card_shelf_t));
+    char elemProp[64];
+
+    // Defaults match the tile the rescaler produces.
+    shelf->cardWidth = 128;
+    shelf->cardHeight = 192;
+    shelf->spacing = 24;
+    shelf->lift = 16;
+    shelf->focus = 0.0f;
+    shelf->focusInit = 0;
+
+    snprintf(elemProp, sizeof(elemProp), "%s_card_width", name);
+    configGetInt(themeConfig, elemProp, &shelf->cardWidth);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_card_height", name);
+    configGetInt(themeConfig, elemProp, &shelf->cardHeight);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_spacing", name);
+    configGetInt(themeConfig, elemProp, &shelf->spacing);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_lift", name);
+    configGetInt(themeConfig, elemProp, &shelf->lift);
+
+    // As a percentage, because the theme config only reads ints.
+    int focusScalePct = 115;
+    snprintf(elemProp, sizeof(elemProp), "%s_focus_scale", name);
+    configGetInt(themeConfig, elemProp, &focusScalePct);
+    shelf->focusScale = (float)focusScalePct / 100.0f;
+
+    int cacheCount = 10;
+    snprintf(elemProp, sizeof(elemProp), "%s_count", name);
+    configGetInt(themeConfig, elemProp, &cacheCount);
+
+    /* Its own cache, deliberately NOT the shared one from initMutableImage.
+       That helper deduplicates caches by art pattern, and an ItemCover in the
+       same theme also uses "COV" -- sharing would push one of the two through
+       the wrong loader, and either the shelf would get native-size covers (the
+       very thing that does not fit) or ItemCover would get 128x192 tiles. */
+    shelf->cache = cacheInitCache(theme->gameCacheCount++, "ART", 1, "COV", cacheCount);
+
+    if (shelf->cache)
+        shelf->cache->psm = GS_PSM_CT16; // ask the loader for the rescaled tile
+
+    elem->extended = shelf;
+    elem->drawElem = &drawCardShelf;
+    elem->endElem = &endCardShelf;
+}
+
 static int addGUIElem(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_elems_t *elems, const char *type, const char *name)
 {
     int enabled = 1;
@@ -1080,6 +1299,12 @@ static int addGUIElem(const char *themePath, config_set_t *themeConfig, theme_t 
             } else if (!strcmp(elementsType[ELEM_TYPE_BDM_INDEX], type)) {
                 elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_BDM_INDEX, screenWidth >> 1, 355, ALIGN_CENTER, DIM_UNDEF, DIM_UNDEF, SCALING_RATIO, gDefaultCol, theme->fonts[0]);
                 elem->drawElem = &drawBDMIndex;
+            } else if (!strcmp(elementsType[ELEM_TYPE_FROSTED_PANEL], type)) {
+                elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_FROSTED_PANEL, 0, 0, ALIGN_NONE, 300, 200, SCALING_NONE, gColDarker, theme->fonts[0]);
+                elem->drawElem = &drawFrostedPanel;
+            } else if (!strcmp(elementsType[ELEM_TYPE_CARD_SHELF], type)) {
+                elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_CARD_SHELF, 40, 180, ALIGN_NONE, 560, 240, SCALING_NONE, theme->textColor, theme->fonts[0]);
+                initCardShelf(themePath, themeConfig, theme, elem, name);
             }
 
             if (elem) {

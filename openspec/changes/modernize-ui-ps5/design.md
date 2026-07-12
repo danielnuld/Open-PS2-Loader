@@ -109,17 +109,27 @@ La prueba de que el pool es imprescindible: **los assets integrados suman 6,508 
 
 Reservar los buffers de desenfoque con `gsKit_vram_alloc()` **nunca va a fallar**. Lo que hace es **encoger el pool de streaming**:
 
-| Modo | PSM | Framebuffers (FIXED) | Pool TEXMAN | Con blur |
+| Modo | PSM | Framebuffers (FIXED) | Pool TEXMAN | Con blur (−224 KiB) |
 |---|---|---|---|---|
-| NTSC 640×448 | CT24 | 2,240 KiB | 1,856 KiB | 1,648 KiB (−208 KiB, −11%) |
-| 480p 640×448 | CT24 | 2,240 KiB | 1,856 KiB | 1,648 KiB (−208 KiB, −11%) |
-| PAL 640×512 | CT24 | 2,560 KiB | 1,536 KiB | 1,312 KiB (−224 KiB, −15%) |
+| NTSC 640×448 | CT24 | 2,240 KiB | 1,856 KiB | **1,632 KiB** ✅ medido |
+| 480p 640×448 | CT24 | 2,240 KiB | 1,856 KiB | 1,632 KiB |
+| PAL 640×512 | CT24 | 2,560 KiB | 1,536 KiB | 1,312 KiB (−15%) |
 | 720p / 1080i | CT16S | — | — | **deshabilitado** |
 
-Cuenta de la cadena, ya redondeada a los bloques de 8 KiB que impone `GSKIT_ALLOC_SYSBUFFER`:
+### La cadena cuesta 224 KiB, no 210 — y lo mismo en NTSC que en PAL
 
-- **NTSC** (320×224 + 2×128×112): `147,456 + 2·32,768 = 212,992 B ≈ 208 KiB`
-- **PAL** (320×256 + 2×128×128): `163,840 + 2·32,768 = 229,376 B ≈ 224 KiB`
+`gsKit_texture_size()` **alinea a páginas**, no al número de píxeles. En CT16S un bloque son 16×8 px y una página son 4×8 bloques, así que la **altura se redondea hacia arriba** al siguiente múltiplo de 64 píxeles:
+
+| RT | Bloques | Alineado a | Bytes |
+|---|---|---|---|
+| 320×224 | 20 × 28 | 20 × **32** | 163,840 |
+| 128×112 | 8 × 14 | 8 × **16** | 32,768 |
+
+`163,840 + 2·32,768 = 229,376 B = **224 KiB**`.
+
+Y como las alturas de PAL (256 y 128) caen **exactamente** en esos mismos límites alineados, la cadena cuesta **lo mismo en PAL que en NTSC**. La estimación original de 210 KiB contaba píxeles crudos e ignoraba la alineación de página.
+
+**Confirmado en PCSX2:** el overlay de debug marca `1632 KiB TEXMAN`, que es exactamente `4096 − 2240 − 224`.
 
 **El fallo, si llega, no es un error de asignación: es thrashing.** Si el conjunto de trabajo de texturas por frame deja de caber en el pool encogido, el TexManager re-sube texturas por DMA en cada frame y el rendimiento cae. Se manifiesta como pérdida de fps, no como una pantalla en negro.
 
@@ -162,13 +172,13 @@ Frente a los ~784 KiB del cálculo optimista anterior, o a los varios MiB del ca
 
 | | NTSC | PAL |
 |---|---|---|
-| Pool TEXMAN con blur activo | 1,646 KiB | 1,296 KiB |
+| Pool TEXMAN con blur activo | **1,632 KiB** (medido) | 1,312 KiB |
 | Fondo (T4) | 256 KiB | 256 KiB |
 | Atlas de fuentes | ≤256 KiB | ≤256 KiB |
 | 7 portadas (128×192 CT16) | 336 KiB | 336 KiB |
 | Iconos y varios | ~100 KiB | ~100 KiB |
 | **Total** | **~948 KiB** | **~948 KiB** |
-| **Margen** | **698 KiB** | **348 KiB** |
+| **Margen** | **684 KiB** | **364 KiB** |
 
 Cabe en ambos, y **también cabría en PAL sin el blur activado** con holgura. El diseño deja de estar al borde.
 
