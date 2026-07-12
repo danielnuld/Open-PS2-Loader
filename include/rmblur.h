@@ -19,13 +19,16 @@
  * result through rmDrawFrosted().
  */
 
-/** Allocates the blur chain in VRAM for the active video mode.
+/** Arms the blur for the active video mode. Call from rmSetMode().
  *
- * Shrinks the TexManager streaming pool by ~210 KiB. Does nothing when hires
- * is set: those modes drive the framebuffer through the multi-pass
- * gsKit_hires_* path, which has no single stable render target to sample.
+ * Deliberately allocates nothing: the video mode is set before the theme is
+ * loaded, so here we cannot yet know whether any glass panel will be drawn --
+ * and a theme that draws none must not pay 224 KiB out of the TexManager pool.
+ * The chain is claimed on the first rmBlurBackdrop() instead.
  *
- * Call once per video mode, from rmSetMode(), after gsKit_init_screen(). */
+ * Blur stays off entirely when hires is set: those modes drive the framebuffer
+ * through the multi-pass gsKit_hires_* path, which has no single stable render
+ * target to sample. */
 void rmBlurInit(int hires);
 
 /** Forgets the chain. The VRAM itself goes back with gsKit_deinit_global(). */

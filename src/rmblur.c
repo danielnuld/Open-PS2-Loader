@@ -37,7 +37,9 @@ extern GSGLOBAL *gsGlobal;
 static const float blurOffsets[] = {0.5f, -0.5f, 1.5f, -1.5f};
 #define BLUR_PASSES (sizeof(blurOffsets) / sizeof(blurOffsets[0]))
 
-static int blurReady = 0;
+static int blurReady = 0;   /* chain allocated and usable */
+static int blurHires = 0;   /* mode we cannot blur in at all */
+static int blurTried = 0;   /* allocation attempted for this video mode */
 
 static GSTEXTURE rtHalf;      /* framebuffer reduced by 2  */
 static GSTEXTURE rtA, rtB;    /* ping-pong pair            */
@@ -63,19 +65,33 @@ static void rmBlurSetupRT(GSTEXTURE *rt, int w, int h)
 
 void rmBlurInit(int hires)
 {
+    /* Deliberately does NOT allocate. The video mode is set before the theme is
+       loaded (opl.c, applyConfig), so at this point we cannot know whether any
+       glass panel will ever be drawn -- and a theme that never draws one must
+       not pay 224 KiB out of the TexManager pool. The chain is claimed on first
+       use instead, from rmBlurBackdrop(). */
     blurReady = 0;
+    blurTried = 0;
+    blurHires = hires;
     blurResult = NULL;
+}
+
+/* Claim the chain. Called on the first glass panel of the first frame that has
+   one; a theme with no glass panel never gets here and never pays for it. */
+static int rmBlurAlloc(void)
+{
+    blurTried = 1;
 
     /* The hires path swaps framebuffers per pass; there is nothing stable to
        sample, and at 720p/1080i the chain would not fit anyway. */
-    if (hires)
-        return;
+    if (blurHires)
+        return 0;
 
     const int h0 = gsGlobal->Height / 2;
     const int h1 = gsGlobal->Height / 4;
 
     if (h1 < 1)
-        return;
+        return 0;
 
     rmBlurSetupRT(&rtHalf, BLUR_W_HALF, h0);
     rmBlurSetupRT(&rtA, BLUR_W_SMALL, h1);
@@ -96,7 +112,7 @@ void rmBlurInit(int hires)
                future mode could exhaust it. Stay disabled rather than draw
                into address 0. */
             LOG("RMBLUR out of VRAM, blur disabled\n");
-            return;
+            return 0;
         }
     }
 
@@ -106,11 +122,16 @@ void rmBlurInit(int hires)
         (gsKit_texture_size(BLUR_W_HALF, h0, GS_PSM_CT16S) +
          2 * gsKit_texture_size(BLUR_W_SMALL, h1, GS_PSM_CT16S)) /
             1024);
+
+    return blurReady;
 }
 
 void rmBlurEnd(void)
 {
+    /* The VRAM goes back wholesale with gsKit_deinit_global(); all we do is
+       forget, so the next video mode claims the chain again on first use. */
     blurReady = 0;
+    blurTried = 0;
     blurResult = NULL;
 }
 
@@ -163,6 +184,13 @@ static void rmBlurBlit(GSTEXTURE *src, GSTEXTURE *dst, float off)
 
 void rmBlurBackdrop(void)
 {
+    /* First glass panel ever drawn in this video mode: claim the chain now.
+       gsKit_vram_alloc() re-inits the TexManager, so the textures already
+       uploaded get re-streamed over the next frame -- a one-off hiccup, and
+       the price of not charging 224 KiB to themes that never blur. */
+    if (!blurTried && !rmBlurAlloc())
+        return;
+
     if (!blurReady)
         return;
 

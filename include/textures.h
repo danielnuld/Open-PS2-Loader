@@ -125,6 +125,11 @@ extern int gCoverDecodeMs;
 extern int gCoverFilterMs;
 #endif
 int texDiscoverLoad(GSTEXTURE *texture, const char *path, int texId);
+
+/** As texDiscoverLoad(), but GS_PSM_CT16 selects the rescaled cover tile
+ *  (texLoadCover) rather than the native-resolution image. Anything else takes
+ *  the original path unchanged. */
+int texDiscoverLoadPsm(GSTEXTURE *texture, const char *path, int texId, short psm);
 void texFree(GSTEXTURE *texture);
 
 #endif

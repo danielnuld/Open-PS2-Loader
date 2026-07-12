@@ -61,9 +61,12 @@ static clock_t prevtime = 0;
 static clock_t curtime = 0;
 static float fps = 0.0f;
 
-// Spot test for the blur chain. Flip to 0 to get a clean debug build back.
-// The FPS meter above is what answers "does the blur still leave us 60 Hz".
-static int gEnableBlurTest = 1;
+// Spot test for the blur chain (tasks 1.4 / 0.6). Off now that FrostedPanel and
+// CardShelf exist: the PS5 theme is the real path, and leaving this on would
+// draw a second panel over it and blur the frame twice. Flip to 1 to exercise
+// the chain without a theme installed -- it also re-runs the cover rescaler and
+// puts its PNG/BOX timings back on the overlay.
+static int gEnableBlurTest = 0;
 
 extern GSGLOBAL *gsGlobal;
 #endif
