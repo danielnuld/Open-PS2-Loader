@@ -1457,6 +1457,19 @@ static void guiDrawOverlays()
         fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
         y += yadd;
     }
+
+    // Task 0.6: cost of rescaling a cover on the EE. Measured once, at load.
+    if (gCoverFilterMs >= 0) {
+        y += yadd; // Empty line
+
+        snprintf(text, sizeof(text), "PNG %dms", gCoverDecodeMs);
+        fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
+        y += yadd;
+
+        snprintf(text, sizeof(text), "BOX %dms", gCoverFilterMs);
+        fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
+        y += yadd;
+    }
 #endif
 
     // Last Played Auto Start
