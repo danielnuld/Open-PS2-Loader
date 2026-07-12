@@ -117,6 +117,13 @@ int texLoadCover(GSTEXTURE *texture, const char *filePath);
 /** Same, from a PNG embedded in the ELF. Used to time the filter (task 0.6)
  *  against a known worst case without needing art on the memory card. */
 int texLoadCoverInternal(GSTEXTURE *texture, int texId);
+
+#ifdef __DEBUG
+/** Cost of the last cover rescale, in ms; -1 until one has run. The debug
+ *  overlay draws these -- LOG() would need a console that may not be open. */
+extern int gCoverDecodeMs;
+extern int gCoverFilterMs;
+#endif
 int texDiscoverLoad(GSTEXTURE *texture, const char *path, int texId);
 void texFree(GSTEXTURE *texture);
 

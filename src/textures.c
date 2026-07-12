@@ -559,6 +559,14 @@ static int texLoadAll(GSTEXTURE *texture, const char *filePath, int texId)
 #define COVER_TILE_W 128
 #define COVER_TILE_H 192
 
+#ifdef __DEBUG
+// Task 0.6. LOG() goes to vprintf, which only surfaces if you have PCSX2's EE
+// console open or ps2link attached -- so the debug overlay draws these instead.
+// -1 means "not measured yet".
+int gCoverDecodeMs = -1;
+int gCoverFilterMs = -1;
+#endif
+
 static inline u16 texPackCT16(u32 r, u32 g, u32 b, u32 a)
 {
     // PSMCT16 is RGBA5551, red in the low bits. The GS expands the single alpha
@@ -658,8 +666,16 @@ static int texLoadCoverAll(GSTEXTURE *texture, const char *filePath, int texId)
     for (png_uint_32 row = 0; row < srcH; row++)
         rowPointers[row] = &allRows[row * rowBytes];
 
+#ifdef __DEBUG
+    const clock_t tDecode = clock();
+#endif
+
     png_read_image(pngPtr, rowPointers);
     png_read_end(pngPtr, NULL);
+
+#ifdef __DEBUG
+    gCoverDecodeMs = (int)((clock() - tDecode) * 1000 / CLOCKS_PER_SEC);
+#endif
 
     texture->Width = COVER_TILE_W;
     texture->Height = COVER_TILE_H;
@@ -719,11 +735,14 @@ static int texLoadCoverAll(GSTEXTURE *texture, const char *filePath, int texId)
 
 #ifdef __DEBUG
     // Task 0.6: this is the number that says whether rescaling on the EE is
-    // affordable. It runs once per cover, not per frame.
-    LOG("TEXTURES cover %ux%u -> %dx%d CT16 (%d KiB) in %ld ms\n",
+    // affordable. It runs once per cover, not per frame. The debug overlay
+    // draws it on screen, since LOG() needs a console that may not be open.
+    gCoverFilterMs = (int)((clock() - tStart) * 1000 / CLOCKS_PER_SEC);
+
+    LOG("TEXTURES cover %ux%u -> %dx%d CT16 (%d KiB): decode %d ms, filter %d ms\n",
         srcW, srcH, COVER_TILE_W, COVER_TILE_H,
         gsKit_texture_size_ee(COVER_TILE_W, COVER_TILE_H, GS_PSM_CT16) / 1024,
-        (long)((clock() - tStart) * 1000 / CLOCKS_PER_SEC));
+        gCoverDecodeMs, gCoverFilterMs);
 #endif
 
     free(allRows);
