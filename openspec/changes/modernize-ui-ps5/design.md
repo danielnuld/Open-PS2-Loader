@@ -182,6 +182,35 @@ Frente a los ~784 KiB del cálculo optimista anterior, o a los varios MiB del ca
 
 Cabe en ambos, y **también cabría en PAL sin el blur activado** con holgura. El diseño deja de estar al borde.
 
+## Presupuesto de relleno del GS (calculado, no medido)
+
+No hay consola física disponible, y PCSX2 no modela el coste del GS. Pero el relleno **se puede calcular**: son píxeles escritos por frame, y no dependen de nada que el emulador falsee.
+
+Una pantalla NTSC son `640·448 = 286,720` px. Presupuesto de frame a 60 Hz: 16.67 ms.
+
+| Capa (tema PS5, estado estable) | px/frame |
+|---|---|
+| Wallpaper (portada estirada) | 286,720 |
+| **Cadena de desenfoque** | **143,360** |
+| Frosted a pantalla completa (fondo + tinte) | 573,440 |
+| Velo en degradado | 286,720 |
+| `FrostedPanel` del shelf (fondo + tinte) | 358,400 |
+| ~5 tarjetas visibles | 114,560 |
+| **Total** | **1,763,200** (≈ 6.1 pantallas) |
+
+Cadena de desenfoque sola: `320·224 + 128·112 + 4·(128·112) = 143,360` px = **media pantalla**.
+
+| Tasa de relleno asumida | Cadena de blur | Tema completo |
+|---|---|---|
+| 1.18 Gpx/s (texturado, pico teórico) | **0.7 %** del frame | 9 % |
+| 0.50 Gpx/s (pesimista, limitado por eDRAM) | **1.7 %** del frame | 21 % |
+
+**El requisito de la spec —«la cadena SHALL consumir menos del 20% del presupuesto de frame»— se cumple con un margen enorme, y eso no depende de medir nada.** Aun asumiendo una tasa de relleno cuatro veces peor que el pico teórico, la cadena cuesta el 1.7%.
+
+**Lo que sigue sin estar cerrado es el relleno total del tema, y no es culpa del blur:** es la composición, que apila varias capas a pantalla completa. Entre 9% y 21% según lo que de verdad rinda el GS con bilineal y blending. Eso es exactamente lo que hay que medir en hardware.
+
+Ya se recortó lo más obvio: en estado estable el wallpaper **no dibuja la capa saliente** del crossfade, porque quedaría tapada del todo. Eso ahorra una pantalla completa de relleno en casi todos los frames.
+
 ## Decisión 5: animación por tiempo, no por frames
 
 OPL corre a 50 Hz en PAL y 60 Hz en NTSC, y pierde frames. Una animación indexada por frames iría un 20% más lenta en Europa.

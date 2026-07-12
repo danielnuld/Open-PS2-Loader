@@ -119,16 +119,26 @@ Se adelantó al resto porque podía invalidar el diseño. Y lo hizo: ver `design
 
   ⚠️ **Números de PCSX2, no de consola.** El emulador no modela fielmente la velocidad del EE y suele correr el código escalar *más rápido* que el hardware real, así que el filtro podría ser bastante más caro en una PS2 física. Da el orden de magnitud y confirma que la idea es viable; **no cierra la fase 7**. Si en hardware resultara caro, la salida obvia es muestrear el filtro cada 2 píxeles (4× más rápido, poca pérdida visible a 128×192).
 
-## 7. Medición final (no opcional) — 🚧 BLOQUEADA: NO HAY CONSOLA FÍSICA
+## 7. Medición final — ❌ NO LA PODEMOS HACER
 
-Hoy sólo hay PCSX2, y PCSX2 **no sirve** para nada de esta fase: no modela el coste real del GS ni la presión sobre el pool del TexManager, que son justo las dos cosas que pueden tumbar el diseño. Sin estos números la PR de la fase 8 no es defendible — un mantenedor de OPL preguntará por ellos lo primero.
+**No hay consola física, y no la va a haber.** El plan original decía «no se pasa a la siguiente fase sin que la anterior corra en hardware real». Esa condición ya no se puede cumplir, así que hay que decir con qué se sustituye en vez de fingir que sigue pendiente.
 
-- [ ] 7.1 Confirmar que el conjunto de trabajo del tema PS5 cabe en el pool encogido, en NTSC **y en PAL** (donde el margen es mucho menor).
-- [ ] 7.2 Medir fps en PS2 física en NTSC y PAL, con y sin blur. Buscar **thrashing**: la caída se vería como pérdida de fps, no como fallo visual.
-- [ ] 7.3 Probar en consola FAT y en SLIM.
-- [ ] 7.4 Documentar los resultados en el propio cambio antes de archivarlo.
+**Lo que sí se cerró sin hardware:**
 
-## 8. Upstream
+- [x] 7.1 **Presupuesto de relleno, calculado.** El relleno son píxeles escritos por frame; no depende de nada que PCSX2 falsee. La cadena de desenfoque cuesta **143,360 px = media pantalla**, o sea entre el **0.7% y el 1.7%** del presupuesto de un frame a 60 Hz según lo que se asuma que rinde el GS. El requisito de la spec (`<20%`) se cumple con un margen enorme. Ver design.md.
+- [x] 7.2 **VRAM, medida en PCSX2 y cuadrada con la teoría.** `1632 KiB TEXMAN` = `4096 − 2240 (framebuffers) − 224 (cadena)`. La VRAM sí es fiable en el emulador: es contabilidad de direcciones, no de rendimiento.
+- [x] 7.3 **Recortado el desperdicio obvio.** En estado estable el wallpaper ya no dibuja la capa saliente del crossfade: se ahorra una pantalla completa de relleno en casi todos los frames.
 
-- [ ] 8.1 Abrir la PR contra `ps2homebrew/Open-PS2-Loader` como cambio **aditivo**, remarcando que ningún tema existente se altera.
-- [ ] 8.2 Adjuntar las mediciones de la fase 7. Sin números, la PR no es discutible.
+**Lo que queda genuinamente abierto, y hay que decirlo en la PR:**
+
+- [ ] 7.4 **Fps reales en consola.** El tema completo apila ≈6.1 pantallas de relleno por frame. Entre el 9% y el 21% del frame según lo que rinda de verdad el GS con bilineal y blending. **Esto no es el blur** —el blur es el 1.7%— **es la composición del tema.** Sólo se puede medir en hardware.
+- [ ] 7.5 **Thrashing del TexManager.** El conjunto de trabajo (~1 MiB) cabe en el pool encogido (1632 KiB) con holgura sobre el papel, pero re-subidas por DMA por frame se manifiestan como pérdida de fps, no como fallo visual. No se ve en PCSX2.
+- [ ] 7.6 **PAL** (pool más estrecho: 1312 KiB) y **consolas FAT vs SLIM**.
+
+## 8. Upstream — como PR en borrador, pidiendo testers
+
+El camino honesto: la comunidad de OPL **sí** tiene hardware. Una PR en borrador con una build de prueba y unas preguntas concretas es mejor que un cambio no publicado que nadie puede validar.
+
+- [ ] 8.1 Abrir la PR contra `ps2homebrew/Open-PS2-Loader` como cambio **aditivo**, remarcando que ningún tema existente se altera (`rmBlurInit()` no reserva nada hasta el primer panel de cristal, así que un tema antiguo ni siquiera paga la VRAM).
+- [ ] 8.2 **Ser explícito sobre el estado de las pruebas.** Verificado en PCSX2; **no verificado en hardware**. Adjuntar el presupuesto de relleno calculado y la medición de VRAM, y decir claramente cuáles son las tres preguntas abiertas (7.4, 7.5, 7.6). Un mantenedor va a preguntar por los fps lo primero: mejor adelantarse y pedir ayuda que dejar que lo descubra.
+- [ ] 8.3 Adjuntar una build de `DEBUG=1`: trae el overlay con fps, `KiB TEXMAN` y los tiempos del reescalador, que es justo lo que un tester necesita para responder.
