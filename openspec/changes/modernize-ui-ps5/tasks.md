@@ -2,18 +2,18 @@
 
 Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. El emulador no modela el coste del GS ni la presión de VRAM.
 
-## 1. Base: render-to-texture — CÓDIGO ESCRITO, SIN VERIFICAR
+## 1. Base: render-to-texture — ✅ VERIFICADO EN PCSX2
 
 - [x] 1.1 Crear `src/rmblur.c` + `include/rmblur.h` con la superficie mínima: `rmBlurInit`, `rmBlurEnd`, `rmBlurBackdrop`, `rmBlurTexture`, `rmBlurAvailable`.
 - [x] 1.2 Implementar el bind/restore del render target vía `ScreenBuffer[]` + `gsKit_setactive()`. **Vaciar la cola con `gsKit_queue_exec()` antes de cada cambio de destino** (ver design.md, Decisión 2). Se salva y restaura también `PSM`, que `gsKit_setactive()` mete en `FRAME`.
 - [x] 1.3 Reservar los buffers CT16S con `gsKit_vram_alloc()` y **comprobar `GSKIT_ALLOC_ERROR`**. Si falla, dejar el módulo deshabilitado. **Van en `GSKIT_ALLOC_SYSBUFFER`**: `FRAME.FBP` direcciona en unidades de 8 KiB y `USERBUFFER` sólo alinea a 256 (ver design.md).
-- [ ] 1.4 Prueba puntual: renderizar un color plano a un RT y volcarlo a pantalla. Confirma bind, restore y orden de cola.
+- [x] 1.4 Prueba puntual: el panel de cristal de `gEnableBlurTest` sale bien en PCSX2 — se ve el fondo desenfocado dentro de la región y **el resto del frame no se corrompe**.
 
-**Estado:** `rmblur.c` compila limpio (sin avisos) y enlaza dentro de `OPNPS2LD.ELF`. Pero **nada llama todavía a `rmBlurBackdrop()`** — el enlazador se come esa función por falta de referencias. No se ha verificado ni un píxel. El punto de enganche es `rmDrawFrosted()`, fase 3.
+**Estado:** ✅ **Verificado en PCSX2.** El render-to-texture sobre gsKit funciona: el bind/restore del destino es correcto y el `gsKit_queue_exec()` previo a cada `gsKit_setactive()` mantiene el orden de dibujado. **Era el riesgo #1 del proyecto y está despejado.**
 
 **Verificable:** el RT se dibuja en pantalla y el resto del frame no se corrompe.
 
-## 2. La cadena de desenfoque — CÓDIGO ESCRITO, SIN VERIFICAR
+## 2. La cadena de desenfoque — ✅ SE VE BIEN EN PCSX2; FALTA MEDIR
 
 - [x] 2.1 Pirámide de reducción: framebuffer → 320×H/2 → 128×H/4, bilineal, `PrimAlphaEnable = OFF`.
 - [x] 2.2 Cuatro pasadas de ping-pong. Los offsets **alternan signo** (`{+0.5, −0.5, +1.5, −1.5}`): la magnitud crece pero suman cero, así la imagen no se arrastra.
@@ -24,16 +24,20 @@ Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. E
 
 **Verificable:** una pantalla de prueba muestra el fondo desenfocado. Medir el coste con `rmEndFrame` y confirmar que quedan 60 fps.
 
-## 3. `rmDrawFrosted()` — CÓDIGO ESCRITO, LISTO PARA VERIFICAR
+## 3. `rmDrawFrosted()` — ✅ VERIFICADO EN PCSX2
 
 - [x] 3.1 Dibujar el backdrop desenfocado en la región, **sin blending** (no depender del alpha de 1 bit del framebuffer). Vive en `renderman.c`, que es donde están `X_SCALE()` y `fRenderXOff` — los que mapean la región lógica de 640×480 a píxeles reales del framebuffer, y por tanto a UVs de la cadena.
 - [x] 3.2 Componer el tinte encima, ese sí con blending.
 - [x] 3.3 Camino de degradación: si no hay cadena, `rmBlurTexture()` devuelve `NULL` y se dibuja sólo el tinte. Siempre es seguro llamarla.
 - [x] 3.4 **Punto de llamada.** Nada llamaba a `rmBlurBackdrop()`, así que el enlazador se comía el módulo entero. Añadido un test puntual en `guiShow()` bajo `#ifdef __DEBUG` (`gEnableBlurTest`), que es lo que hace verificable la tarea 1.4. El tema PS5 lo sustituirá en la fase 6.
 
-**Verificable:** un panel de cristal sobre el menú actual de OPL, sin tocar ningún tema.
+**Verificable:** un panel de cristal sobre el menú actual de OPL, sin tocar ningún tema. ✅ Confirmado en PCSX2.
 
-**Pendiente de tu lado:** compila y enlaza (`rmDrawFrosted`, `rmBlurBackdrop` y `rmBlurTexture` están en el ELF). Falta abrir `OPNPS2LD.ELF` (build `DEBUG=1`) en PCSX2 y mirar. El medidor de FPS que ya trae el build de debug es el que contesta si la cadena deja los 60 Hz.
+**Lo que PCSX2 NO contesta, y sigue abierto:**
+
+- **Los fps.** PCSX2 no modela el coste real del GS ni la presión sobre el pool del TexManager. El requisito de «menos del 20% del presupuesto de frame» (spec `gs-backdrop-blur`) sólo se puede cerrar en consola física.
+- **PAL.** Todo lo verificado hasta ahora es NTSC. En PAL los RT son más grandes (320×256 + 2×128×128 = 224 KiB) y el pool que queda es bastante más estrecho.
+- **Hardware real**, FAT y SLIM. Ver fase 7.
 
 ## 4. Animación
 
