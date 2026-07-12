@@ -60,6 +60,10 @@ static clock_t prevtime = 0;
 static clock_t curtime = 0;
 static float fps = 0.0f;
 
+// Spot test for the blur chain. Flip to 0 to get a clean debug build back.
+// The FPS meter above is what answers "does the blur still leave us 60 Hz".
+static int gEnableBlurTest = 1;
+
 extern GSGLOBAL *gsGlobal;
 #endif
 
@@ -1514,6 +1518,17 @@ static void guiShow()
     } else
         // render with the set screen handler
         screenHandler->renderScreen();
+
+#ifdef __DEBUG
+    // Spot test for the blur chain (tasks 1.4 / 3.x). The theme system is what
+    // will drive this for real; until then, this is the only thing that calls
+    // rmBlurBackdrop(), and without a call site the linker drops the module.
+    // Debug builds only -- it must never reach a release ELF.
+    if (gEnableBlurTest) {
+        rmBlurBackdrop();
+        rmDrawFrosted(80, 60, 480, 360, GS_SETREG_RGBA(0x20, 0x20, 0x30, 0x40));
+    }
+#endif
 }
 
 void guiIntroLoop(void)
