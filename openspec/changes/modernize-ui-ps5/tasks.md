@@ -135,10 +135,12 @@ Se adelantó al resto porque podía invalidar el diseño. Y lo hizo: ver `design
 - [ ] 7.5 **Thrashing del TexManager.** El conjunto de trabajo (~1 MiB) cabe en el pool encogido (1632 KiB) con holgura sobre el papel, pero re-subidas por DMA por frame se manifiestan como pérdida de fps, no como fallo visual. No se ve en PCSX2.
 - [ ] 7.6 **PAL** (pool más estrecho: 1312 KiB) y **consolas FAT vs SLIM**.
 
-## 8. Upstream — como PR en borrador, pidiendo testers
+## 8. Upstream — PR en borrador, pidiendo testers
 
-El camino honesto: la comunidad de OPL **sí** tiene hardware. Una PR en borrador con una build de prueba y unas preguntas concretas es mejor que un cambio no publicado que nadie puede validar.
+El camino honesto: la comunidad de OPL **sí** tiene hardware. Una PR en borrador con instrucciones de build y unas preguntas concretas vale más que un cambio no publicado que nadie puede validar.
 
-- [ ] 8.1 Abrir la PR contra `ps2homebrew/Open-PS2-Loader` como cambio **aditivo**, remarcando que ningún tema existente se altera (`rmBlurInit()` no reserva nada hasta el primer panel de cristal, así que un tema antiguo ni siquiera paga la VRAM).
-- [ ] 8.2 **Ser explícito sobre el estado de las pruebas.** Verificado en PCSX2; **no verificado en hardware**. Adjuntar el presupuesto de relleno calculado y la medición de VRAM, y decir claramente cuáles son las tres preguntas abiertas (7.4, 7.5, 7.6). Un mantenedor va a preguntar por los fps lo primero: mejor adelantarse y pedir ayuda que dejar que lo descubra.
-- [ ] 8.3 Adjuntar una build de `DEBUG=1`: trae el overlay con fps, `KiB TEXMAN` y los tiempos del reescalador, que es justo lo que un tester necesita para responder.
+- [x] 8.1 PR abierta **en el fork** (`danielnuld/Open-PS2-Loader#1`, `master ← feature/ps5-ui`, en borrador), no contra `ps2homebrew`. Es el paso previo: revisar en casa antes de exponerlo. Redactada en inglés justamente para poder re-apuntarla a upstream sin reescribirla.
+- [x] 8.2 **Estado de las pruebas, explícito y arriba del todo.** Verificado en PCSX2; **no verificado en hardware**. Lleva el presupuesto de relleno calculado, la medición de VRAM y las tres preguntas abiertas (7.4, 7.5, 7.6), dejando claro que **el riesgo no es el blur** (1.7% del frame) sino la composición del tema (~6.1 pantallas de relleno).
+- [x] 8.3 Instrucciones de `make DEBUG=1`: el overlay trae fps, `KiB TEXMAN` y los tiempos del reescalador, que es justo lo que un tester necesita para contestar.
+
+**Pendiente antes de apuntar a upstream:** los mensajes de commit están en español. Para `ps2homebrew` habría que reescribirlos en inglés.
