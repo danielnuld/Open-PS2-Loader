@@ -55,6 +55,7 @@ enum ELEM_ATTRIBUTE_TYPE {
     // upstreamable: a UI rewrite never merges, an additive element type does.
     ELEM_TYPE_FROSTED_PANEL,
     ELEM_TYPE_CARD_SHELF,
+    ELEM_TYPE_COVER_WALLPAPER,
     ELEM_TYPE_COUNT
 };
 
@@ -85,7 +86,8 @@ static const char *elementsType[ELEM_TYPE_COUNT] = {
     "BdmIndex",
     "GameCountText",
     "FrostedPanel",
-    "CardShelf"};
+    "CardShelf",
+    "CoverWallpaper"};
 
 // Common functions for Text ////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -953,9 +955,15 @@ static void drawInfoHintText(struct menu_list *menu, struct submenu_list *item, 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// A CoverWallpaper covers the screen and IS the background, so it counts as one
+// here. Without this, OPL would prepend a default BG_ART element in front of it:
+// a full-screen draw that is then painted over completely, plus a cache nobody
+// reads.
+#define ELEM_IS_BACKGROUND(t) (((t) == ELEM_TYPE_BACKGROUND) || ((t) == ELEM_TYPE_COVER_WALLPAPER))
+
 static void validateBackgroundElems(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_elems_t *mainElems, theme_elems_t *infoElems)
 {
-    if (!mainElems->first || (mainElems->first->type != ELEM_TYPE_BACKGROUND)) {
+    if (!mainElems->first || !ELEM_IS_BACKGROUND(mainElems->first->type)) {
         LOG("THEMES No valid background found for main, add default BG_ART\n");
         theme_element_t *backgroundElem = initBasic(themePath, themeConfig, theme, "bg", ELEM_TYPE_BACKGROUND, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol, theme->fonts[0]);
         initBackground(themePath, themeConfig, theme, backgroundElem, "bg", "BG", 1, NULL);
@@ -964,7 +972,7 @@ static void validateBackgroundElems(const char *themePath, config_set_t *themeCo
     }
 
     if (infoElems->first) {
-        if (infoElems->first->type != ELEM_TYPE_BACKGROUND) {
+        if (!ELEM_IS_BACKGROUND(infoElems->first->type)) {
             LOG("THEMES No valid background found for info, add default BG_ART\n");
             theme_element_t *backgroundElem = initBasic(themePath, themeConfig, theme, "bg", ELEM_TYPE_BACKGROUND, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol, theme->fonts[0]);
             initBackground(themePath, themeConfig, theme, backgroundElem, "bg", "BG", 1, NULL);
@@ -1226,6 +1234,149 @@ static void initCardShelf(const char *themePath, config_set_t *themeConfig, them
     elem->endElem = &endCardShelf;
 }
 
+// CoverWallpaper ///////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+typedef struct
+{
+    image_cache_t *cache;
+
+    /* Crossfade state. These are GSTEXTURE pointers into the cache, NOT menu
+       items: a cache's GSTEXTURE structs live as long as the cache, whereas a
+       submenu item can be freed out from under us when the device list is
+       rebuilt. Worst case the outgoing entry gets recycled mid-fade and we
+       blend from the wrong art for a few hundred ms. It can never dangle. */
+    GSTEXTURE *current;
+    GSTEXTURE *prev;
+    float fade;
+    float fadeTime;
+
+    u64 veilTop;
+    u64 veilBottom;
+} cover_wallpaper_t;
+
+static void drawCoverWallpaper(struct menu_list *menu, struct submenu_list *item, config_set_t *config, struct theme_element *elem)
+{
+    cover_wallpaper_t *wp = (cover_wallpaper_t *)elem->extended;
+    GSTEXTURE *cover = NULL;
+
+    if (item) {
+        cover = getGameImageTexture(wp->cache, menu->item->userdata, &item->item);
+
+        if (cover && !cover->Mem)
+            cover = NULL; // still streaming in on the IO thread
+    }
+
+    // Focus moved, or the art just finished loading: start a crossfade.
+    if (cover != wp->current) {
+        wp->prev = wp->current;
+        wp->current = cover;
+        wp->fade = 0.0f;
+    }
+
+    wp->fade = uiAdvance(wp->fade, wp->fadeTime, uiAnimDelta());
+
+    const float t = uiEaseInOutCubic(wp->fade);
+
+    // Outgoing art, full screen. The tile is only 128x192, but it is about to
+    // be blurred into mush, so stretching it is free and costs no extra VRAM.
+    if (wp->prev && wp->prev->Mem)
+        rmDrawPixmap(wp->prev, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol);
+    else
+        rmDrawRect(0, 0, screenWidth, screenHeight, gColBlack);
+
+    // Incoming art, faded in over it.
+    if (wp->current) {
+        const u32 a = (u32)(0x80 * t);
+
+        rmDrawPixmapBlend(wp->current, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE,
+                          GS_SETREG_RGBA(0x80, 0x80, 0x80, a));
+    }
+
+    /* Now blur the lot. The chain samples the FRAMEBUFFER, which at this point
+       holds the stretched cover -- so a frosted panel over the whole screen IS
+       the blurred wallpaper. And with no blur available it degrades to just the
+       tint, leaving the cover sharp underneath, which is exactly the fallback
+       the spec asks for. */
+    frostedEnsureBackdrop();
+    rmDrawFrosted(0, 0, screenWidth, screenHeight, elem->color);
+
+    /* The veil. A cover can easily be a bright image and the UI text is white,
+       so the contrast has to be bought rather than hoped for. It is a gradient
+       because the text sits at the bottom: dark where the text is, light where
+       the art should still breathe. */
+    rmDrawRectGradient(0, 0, screenWidth, screenHeight, wp->veilTop, wp->veilBottom);
+}
+
+static void endCoverWallpaper(struct theme_element *elem)
+{
+    cover_wallpaper_t *wp = (cover_wallpaper_t *)elem->extended;
+
+    if (wp) {
+        if (wp->cache)
+            cacheDestroyCache(wp->cache);
+
+        free(wp);
+        elem->extended = NULL;
+    }
+}
+
+static void initCoverWallpaper(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_element_t *elem, const char *name)
+{
+    cover_wallpaper_t *wp = (cover_wallpaper_t *)malloc(sizeof(cover_wallpaper_t));
+    char elemProp[64];
+    unsigned char color[3];
+
+    wp->current = NULL;
+    wp->prev = NULL;
+    wp->fade = 1.0f;
+
+    int fadeMs = 350;
+    snprintf(elemProp, sizeof(elemProp), "%s_fade_ms", name);
+    configGetInt(themeConfig, elemProp, &fadeMs);
+    wp->fadeTime = (float)fadeMs / 1000.0f;
+
+    // The veil is darker at the bottom, where the title text lives.
+    int veilTopAlpha = 0x30;
+    int veilBottomAlpha = 0x70;
+
+    unsigned char veilTopRGB[3] = {0x00, 0x00, 0x00};
+    unsigned char veilBottomRGB[3] = {0x00, 0x00, 0x00};
+
+    snprintf(elemProp, sizeof(elemProp), "%s_veil_top", name);
+    if (configGetColor(themeConfig, elemProp, color))
+        memcpy(veilTopRGB, color, sizeof(veilTopRGB));
+
+    snprintf(elemProp, sizeof(elemProp), "%s_veil_bottom", name);
+    if (configGetColor(themeConfig, elemProp, color))
+        memcpy(veilBottomRGB, color, sizeof(veilBottomRGB));
+
+    snprintf(elemProp, sizeof(elemProp), "%s_veil_top_alpha", name);
+    configGetInt(themeConfig, elemProp, &veilTopAlpha);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_veil_bottom_alpha", name);
+    configGetInt(themeConfig, elemProp, &veilBottomAlpha);
+
+    wp->veilTop = GS_SETREG_RGBA(veilTopRGB[0], veilTopRGB[1], veilTopRGB[2], veilTopAlpha);
+    wp->veilBottom = GS_SETREG_RGBA(veilBottomRGB[0], veilBottomRGB[1], veilBottomRGB[2], veilBottomAlpha);
+
+    int cacheCount = 10;
+    snprintf(elemProp, sizeof(elemProp), "%s_count", name);
+    configGetInt(themeConfig, elemProp, &cacheCount);
+
+    // Its own cache, and CT16 like the shelf's: the wallpaper wants the small
+    // tile too. Drawing it full screen from a 128x192 tile is fine precisely
+    // because it ends up blurred -- and it keeps the native-size cover, which
+    // can be 1,440 KiB, out of VRAM.
+    wp->cache = cacheInitCache(theme->gameCacheCount++, "ART", 1, "COV", cacheCount);
+
+    if (wp->cache)
+        wp->cache->psm = GS_PSM_CT16;
+
+    elem->extended = wp;
+    elem->drawElem = &drawCoverWallpaper;
+    elem->endElem = &endCoverWallpaper;
+}
+
 static int addGUIElem(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_elems_t *elems, const char *type, const char *name)
 {
     int enabled = 1;
@@ -1305,6 +1456,11 @@ static int addGUIElem(const char *themePath, config_set_t *themeConfig, theme_t 
             } else if (!strcmp(elementsType[ELEM_TYPE_CARD_SHELF], type)) {
                 elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_CARD_SHELF, 40, 180, ALIGN_NONE, 560, 240, SCALING_NONE, theme->textColor, theme->fonts[0]);
                 initCardShelf(themePath, themeConfig, theme, elem, name);
+            } else if (!strcmp(elementsType[ELEM_TYPE_COVER_WALLPAPER], type)) {
+                if (!elems->first) { // like Background: it IS the backdrop, so it must come first
+                    elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_COVER_WALLPAPER, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gColDarker, theme->fonts[0]);
+                    initCoverWallpaper(themePath, themeConfig, theme, elem, name);
+                }
             }
 
             if (elem) {

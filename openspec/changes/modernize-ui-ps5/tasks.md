@@ -75,11 +75,23 @@ Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. E
 ## 6. Tema PS5
 
 - [x] 6.1 `themes/PS5/conf_theme.cfg` componiendo `CardShelf` + `FrostedPanel`. **El orden importa y no es cosmético:** `FrostedPanel` desenfoca lo que ya se haya dibujado en el frame, así que el fondo va antes del panel y el shelf después, para quedar nítido encima del cristal.
-- [ ] 6.2 Wallpaper = portada enfocada, a pantalla completa, desenfocada, con velo en degradado para garantizar contraste del texto.
-- [ ] 6.3 Transición del wallpaper al cambiar de foco.
-- [ ] 6.4 No hacerlo el tema por defecto.
+- [x] 6.2 Wallpaper = portada enfocada, a pantalla completa, desenfocada, con velo en degradado. Elemento nuevo `CoverWallpaper`.
+
+  **Cómo se desenfoca sin maquinaria nueva:** la cadena samplea el **framebuffer**. Si el wallpaper dibuja primero la portada estirada, el framebuffer *ya la contiene* — así que un `rmDrawFrosted()` a pantalla completa **es** el wallpaper desenfocado. Y cuando no hay blur, `rmDrawFrosted` degrada a sólo el tinte, dejando la portada nítida debajo: exactamente el fallback que pide la spec, sin escribir una línea para ello.
+
+  El velo es un degradado (`rmDrawRectGradient`, un solo quad gouraud — el GS interpola el color entre vértices gratis, así que cuesta lo mismo que un rectángulo plano). Va más oscuro abajo, que es donde se apoya el título.
+
+  Se estira un tile de 128×192 a pantalla completa, y da igual: acaba desenfocado. Eso mantiene la portada nativa (hasta 1.440 KiB) fuera de la VRAM.
+- [x] 6.3 Transición del wallpaper al cambiar de foco: crossfade de 350 ms con `uiEaseInOutCubic`.
+
+  Hizo falta `rmDrawPixmapBlend()`: `rmDrawQuad` decide el alpha **según el formato** y sólo lo activa para CT32, así que un tile CT16 era literalmente imposible de fundir. La variante nueva fuerza el blending y deja que el alpha del color mande.
+
+  **El crossfade guarda punteros a `GSTEXTURE`, no a items del menú.** Los `GSTEXTURE` de una caché viven lo que vive la caché; un item de submenú puede liberarse bajo tus pies cuando se reconstruye la lista de dispositivos. En el peor caso la entrada saliente se recicla a mitad del fundido y se mezcla el arte equivocado durante unos cientos de ms — pero nunca puede quedar colgado.
+- [x] 6.4 No es el tema por defecto: el usuario copia `themes/PS5/` a `<dispositivo>/THM/PS5/` y lo elige a mano.
 
 **Verificable:** el tema PS5 seleccionable y usable de punta a punta.
+
+**Ajuste al integrarlo:** `validateBackgroundElems()` antepone un `Background` por defecto si el primer elemento no lo es. Un `CoverWallpaper` **es** el fondo, así que ahora cuenta como tal; sin eso, OPL dibujaba debajo un fondo a pantalla completa que quedaba tapado del todo, más una caché que no leía nadie.
 
 ## 0. Medición previa — HECHA PARCIALMENTE
 
