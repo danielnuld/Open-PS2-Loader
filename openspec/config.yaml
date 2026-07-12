@@ -1,0 +1,36 @@
+schema: spec-driven
+
+context: |
+  Open-PS2-Loader (OPL) — cargador de juegos homebrew para PlayStation 2.
+  C99, ~28k líneas en src/ + include/. Toolchain: ps2dev (GCC 15.2, target
+  mips64r5900el-ps2-elf), ps2sdk, gsKit, FreeType.
+
+  Capa gráfica:
+    - src/renderman.c  — wrapper sobre gsKit. rmInit/rmSetMode/rmStartFrame/
+      rmEndFrame, rmDrawQuad/rmDrawPixmap/rmDrawRect. Presupuesto de VRAM
+      declarado en __VRAM_SIZE (4 MiB).
+    - src/fntsys.c     — FreeType + atlas de glifos.
+    - src/atlas.c      — empaquetado de texturas.
+    - src/themes.c     — sistema de temas dirigido por datos: registro de
+      elementos tipados (elementsType[ELEM_TYPE_COUNT]) con init/draw por tipo.
+      Los temas se cargan de disco (conf_theme.cfg).
+    - src/menusys.c, src/gui.c — lógica de menú e input.
+
+  Restricciones del hardware (NO negociables):
+    - 4 MiB de eDRAM en el Graphics Synthesizer. Es el recurso escaso, no la CPU.
+    - El GS no tiene shaders. Función fija: gouraud, bilineal, alpha, scissor.
+    - El EE (R5900) NO tiene doble precisión en hardware: todo `double` se emula
+      por software. Usar `float` siempre.
+
+  Convenciones del GS que ya usa OPL (respetarlas):
+    - Alpha: 0x80 es opaco (1.0), no 0xFF. gDefaultAlpha = GS_SETREG_ALPHA(0,1,0,1,0)
+      es la composición "source over"; el default de gsKit tiene el alpha INVERTIDO.
+    - Color: 0x80 es el neutro de MODULATE (gDefaultCol). Un 0xFF sobreexpone.
+    - Para blits opacos se apaga gsGlobal->PrimAlphaEnable temporalmente.
+
+rules:
+  proposal:
+    - Todo cambio gráfico debe declarar su coste en VRAM (bytes) por modo de vídeo.
+  design:
+    - Incluir el presupuesto de VRAM por modo de vídeo, con la cuenta hecha.
+    - Declarar explícitamente la compatibilidad hacia atrás con los temas existentes.
