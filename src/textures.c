@@ -539,6 +539,209 @@ static int texLoadAll(GSTEXTURE *texture, const char *filePath, int texId)
     return texEnd(pngPtr, infoPtr, pFileBuffer, 0);
 }
 
+/*
+ * Cover art rescaler -- a prerequisite for the card shelf, not an optimization.
+ *
+ * The normal loader above uploads a cover at the PNG's NATIVE resolution
+ * (texture->Width = pngWidth), capped only by maxSize = 720*512*4 = 1,440 KiB.
+ * That is most of the 1,856 KiB TexManager pool spent on ONE cover. It works
+ * today because the menu only ever shows one at a time and the pool streams.
+ * A shelf of seven would want 3-10 MiB: that does not fit in the console.
+ *
+ * So shelf covers are box-filtered down to a fixed tile on the EE, once, at
+ * load time, and kept in CT16: 128*192*2 = 48 KiB each, 336 KiB for seven.
+ *
+ * The filter runs over libpng's decoded RGBA rows rather than over a GSTEXTURE,
+ * which buys two things: it sidesteps the GS-specific packing entirely (T8
+ * stores a swizzled CLUT, T4 swaps its nibbles), and the native image is never
+ * allocated as a texture at all -- so it cannot reach VRAM even transiently.
+ */
+#define COVER_TILE_W 128
+#define COVER_TILE_H 192
+
+static inline u16 texPackCT16(u32 r, u32 g, u32 b, u32 a)
+{
+    // PSMCT16 is RGBA5551, red in the low bits. The GS expands the single alpha
+    // bit through TEXA; set means opaque.
+    return (u16)((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10) | ((a >= 128) ? 0x8000 : 0));
+}
+
+static int texLoadCoverAll(GSTEXTURE *texture, const char *filePath, int texId)
+{
+    png_structp pngPtr = NULL;
+    png_infop infoPtr = NULL;
+    void *pFileBuffer = NULL;
+    void *PngFileBufferPtr;
+
+    texPrepare(texture);
+
+    if (filePath) {
+        int fd = open(filePath, O_RDONLY, 0);
+        if (fd < 0)
+            return ERR_BAD_FILE;
+
+        int fileSize = lseek(fd, 0, SEEK_END);
+        lseek(fd, 0, SEEK_SET);
+
+        pFileBuffer = malloc(fileSize);
+        if (pFileBuffer == NULL) {
+            close(fd);
+            return ERR_BAD_FILE;
+        }
+
+        if (read(fd, pFileBuffer, fileSize) != fileSize) {
+            LOG("texLoadCover: failed to read %s\n", filePath);
+            free(pFileBuffer);
+            close(fd);
+            return ERR_BAD_FILE;
+        }
+
+        close(fd);
+        PngFileBufferPtr = pFileBuffer;
+    } else {
+        if (texId == -1 || !internalDefault[texId].texture)
+            return ERR_BAD_FILE;
+
+        PngFileBufferPtr = internalDefault[texId].texture;
+    }
+
+    pngPtr = png_create_read_struct(PNG_LIBPNG_VER_STRING, (png_voidp)NULL, NULL, NULL);
+    if (!pngPtr)
+        return texEnd(pngPtr, infoPtr, pFileBuffer, ERR_READ_STRUCT);
+
+    infoPtr = png_create_info_struct(pngPtr);
+    if (!infoPtr)
+        return texEnd(pngPtr, infoPtr, pFileBuffer, ERR_INFO_STRUCT);
+
+    if (setjmp(png_jmpbuf(pngPtr)))
+        return texEnd(pngPtr, infoPtr, pFileBuffer, ERR_SET_JMP);
+
+    png_set_read_fn(pngPtr, &PngFileBufferPtr, &texReadMemFunction);
+    png_set_sig_bytes(pngPtr, 0);
+    png_read_info(pngPtr, infoPtr);
+
+    png_uint_32 srcW, srcH;
+    int bitDepth, colorType;
+    png_get_IHDR(pngPtr, infoPtr, &srcW, &srcH, &bitDepth, &colorType, NULL, NULL, NULL);
+
+    if (srcW == 0 || srcH == 0 || srcW > 1024 || srcH > 1024)
+        return texEnd(pngPtr, infoPtr, pFileBuffer, ERR_BAD_DIMENSION);
+
+    // Whatever the PNG is, make libpng hand it over as straight RGBA8.
+    if (bitDepth == 16)
+        png_set_strip_16(pngPtr);
+    if (colorType == PNG_COLOR_TYPE_PALETTE)
+        png_set_palette_to_rgb(pngPtr);
+    if (colorType == PNG_COLOR_TYPE_GRAY || colorType == PNG_COLOR_TYPE_GRAY_ALPHA) {
+        if (bitDepth < 8)
+            png_set_expand_gray_1_2_4_to_8(pngPtr);
+        png_set_gray_to_rgb(pngPtr);
+    }
+    if (png_get_valid(pngPtr, infoPtr, PNG_INFO_tRNS))
+        png_set_tRNS_to_alpha(pngPtr);
+
+    png_set_filler(pngPtr, 0xff, PNG_FILLER_AFTER);
+    png_read_update_info(pngPtr, infoPtr);
+
+    const int rowBytes = png_get_rowbytes(pngPtr, infoPtr);
+
+    png_bytep *rowPointers = calloc(srcH, sizeof(png_bytep));
+    png_bytep allRows = rowPointers ? malloc(rowBytes * srcH) : NULL;
+
+    if (!rowPointers || !allRows) {
+        LOG("texLoadCover: out of memory for %ux%u rows\n", srcW, srcH);
+        free(rowPointers);
+        free(allRows);
+        return texEnd(pngPtr, infoPtr, pFileBuffer, ERR_BAD_FILE);
+    }
+
+    for (png_uint_32 row = 0; row < srcH; row++)
+        rowPointers[row] = &allRows[row * rowBytes];
+
+    png_read_image(pngPtr, rowPointers);
+    png_read_end(pngPtr, NULL);
+
+    texture->Width = COVER_TILE_W;
+    texture->Height = COVER_TILE_H;
+    texture->PSM = GS_PSM_CT16;
+    texture->Mem = memalign(128, gsKit_texture_size_ee(COVER_TILE_W, COVER_TILE_H, GS_PSM_CT16));
+
+    if (!texture->Mem) {
+        free(allRows);
+        free(rowPointers);
+        return texEnd(pngPtr, infoPtr, pFileBuffer, ERR_BAD_FILE);
+    }
+
+    u16 *dst = (u16 *)texture->Mem;
+
+#ifdef __DEBUG
+    const clock_t tStart = clock();
+#endif
+
+    // Box filter: every destination texel averages the whole source rectangle
+    // that maps onto it. Nearest-neighbour decimation of a 512x720 cover down
+    // to 128x192 would throw away 15 of every 16 pixels and alias badly.
+    for (int dy = 0; dy < COVER_TILE_H; dy++) {
+        const u32 sy0 = ((u32)dy * srcH) / COVER_TILE_H;
+        u32 sy1 = ((u32)(dy + 1) * srcH) / COVER_TILE_H;
+
+        // Covers smaller than the tile map several destination rows onto one
+        // source row; the rectangle must never be empty.
+        if (sy1 <= sy0)
+            sy1 = sy0 + 1;
+
+        for (int dx = 0; dx < COVER_TILE_W; dx++) {
+            const u32 sx0 = ((u32)dx * srcW) / COVER_TILE_W;
+            u32 sx1 = ((u32)(dx + 1) * srcW) / COVER_TILE_W;
+
+            if (sx1 <= sx0)
+                sx1 = sx0 + 1;
+
+            u32 r = 0, g = 0, b = 0, a = 0, n = 0;
+
+            for (u32 sy = sy0; sy < sy1; sy++) {
+                const png_bytep row = rowPointers[sy];
+
+                for (u32 sx = sx0; sx < sx1; sx++) {
+                    const png_bytep px = &row[4 * sx];
+
+                    r += px[0];
+                    g += px[1];
+                    b += px[2];
+                    a += px[3];
+                    n++;
+                }
+            }
+
+            dst[dy * COVER_TILE_W + dx] = texPackCT16(r / n, g / n, b / n, a / n);
+        }
+    }
+
+#ifdef __DEBUG
+    // Task 0.6: this is the number that says whether rescaling on the EE is
+    // affordable. It runs once per cover, not per frame.
+    LOG("TEXTURES cover %ux%u -> %dx%d CT16 (%d KiB) in %ld ms\n",
+        srcW, srcH, COVER_TILE_W, COVER_TILE_H,
+        gsKit_texture_size_ee(COVER_TILE_W, COVER_TILE_H, GS_PSM_CT16) / 1024,
+        (long)((clock() - tStart) * 1000 / CLOCKS_PER_SEC));
+#endif
+
+    free(allRows);
+    free(rowPointers);
+
+    return texEnd(pngPtr, infoPtr, pFileBuffer, 0);
+}
+
+int texLoadCover(GSTEXTURE *texture, const char *filePath)
+{
+    return texLoadCoverAll(texture, filePath, -1);
+}
+
+int texLoadCoverInternal(GSTEXTURE *texture, int texId)
+{
+    return texLoadCoverAll(texture, NULL, texId);
+}
+
 static int texLoad(GSTEXTURE *texture, const char *filePath)
 {
     return texLoadAll(texture, filePath, -1);

@@ -1543,6 +1543,23 @@ static void guiShow()
 
         rmBlurBackdrop();
         rmDrawFrosted((int)panelX, 60, 480, 360, GS_SETREG_RGBA(0x20, 0x20, 0x30, 0x40));
+
+        // Task 0.6: time the EE box filter against a known worst case. MAIN_BG
+        // is background.png -- 1024x512 and palettized, so it is both bigger
+        // than the 720x512 cover cap and exercises the palette path. Rescaled
+        // once; the ms lands in the ps2link log. The tile is drawn so the
+        // filter's output can actually be looked at, not just timed.
+        static GSTEXTURE coverTile;
+        static int coverTried = 0;
+
+        if (!coverTried) {
+            coverTried = 1;
+            if (texLoadCoverInternal(&coverTile, MAIN_BG) < 0)
+                coverTile.Mem = NULL;
+        }
+
+        if (coverTile.Mem)
+            rmDrawPixmap(&coverTile, 480, 300, ALIGN_CENTER, 128, 192, SCALING_NONE, gDefaultCol);
     }
 #endif
 }

@@ -55,7 +55,11 @@ Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. E
 
 - [ ] 5.1 Añadir `FrostedPanel` **al final** de `elementsType[]` (no reordenar) con su `init`/`draw`.
 - [ ] 5.2 Añadir `CardShelf` igual: fila horizontal, foco que crece y se eleva, no enfocadas atenuadas.
-- [ ] 5.3 **Reescalador de portadas en el EE**: filtro de caja de la imagen nativa a un tile de 128×192 CT16, con caché. La imagen nativa NUNCA sube a VRAM. Es prerrequisito duro del `CardShelf` (ver 0.5).
+- [x] 5.3 **Reescalador de portadas en el EE**: `texLoadCover()` en `textures.c`. Filtro de caja a un tile fijo de 128×192 CT16 (48 KiB). La imagen nativa **nunca se llega a asignar como GSTEXTURE**, así que no puede subir a VRAM ni transitoriamente.
+
+  **Decisión de implementación:** el filtro corre sobre las filas RGBA que devuelve libpng, **no sobre el `Mem` de una GSTEXTURE ya empaquetada**. Empaquetar es específico del GS —el T8 guarda la CLUT swizzleada y el T4 intercambia los nibbles— y filtrar ahí obligaría a deshacer las dos cosas. Por las filas de libpng, un solo camino sirve para CT32, CT24, gris y paleta.
+
+  El caché sale gratis: las portadas ya pasan por `image_cache_t` (`texcache.c`), que cachea por entrada. Lo consumirá el `CardShelf` en 5.3b.
 - [ ] 5.3b `CardShelf` consume esos tiles. Reserva con el título cuando no haya portada.
 - [ ] 5.4 Culling: dibujar sólo las tarjetas visibles o adyacentes.
 - [ ] 5.5 **Regresión:** cargar un tema antiguo y confirmar que renderiza idéntico y que no reserva VRAM de blur.
@@ -80,7 +84,7 @@ Se adelantó al resto porque podía invalidar el diseño. Y lo hizo: ver `design
 - [x] 0.3 Build de OPL con `DEBUG=1` (overlay de VRAM activo). `OPNPS2LD.ELF` generado.
 - [x] 0.4 **FIXED / TEXMAN reales confirmados en el overlay: 2,240 KiB / 1,856 KiB** (NTSC 640×448 CT24). Coincide con la contabilidad estática.
 - [x] 0.5 **Dimensionar las portadas.** **Hallazgo decisivo:** OPL sube las portadas a resolución NATIVA (`textures.c:477`) con un límite de 720×512×4 = **1,440 KiB por textura** (`textures.c:102`). Una sola portada puede ocupar casi todo el pool. Siete a tamaño nativo = 3–10 MiB: **imposible**. Decisión: tile fijo **128×192 en CT16 (48 KiB)**, reescalado en el EE al cargar. Ver `design.md`, Decisión 5.
-- [ ] 0.6 Validar el reescalado en el EE: medir el coste en ms de un filtro de caja sobre una portada de 720×512.
+- [ ] 0.6 Validar el reescalado en el EE: medir el coste en ms de un filtro de caja sobre una portada de 720×512. **Arnés listo:** el build `DEBUG=1` reescala `background.png` una vez al arrancar y escribe los ms al log. Se eligió ese PNG a propósito: 1024×512 (más grande que el tope de 720×512 de una portada) **y paletizado**, así que es el peor caso y además ejercita el camino de paleta. Falta leer el número.
 
 ## 7. Medición final (no opcional) — 🚧 BLOQUEADA: NO HAY CONSOLA FÍSICA
 
