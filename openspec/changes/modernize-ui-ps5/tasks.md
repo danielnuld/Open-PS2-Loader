@@ -39,13 +39,17 @@ Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. E
 - **PAL.** Todo lo verificado hasta ahora es NTSC. En PAL los RT son más grandes (320×256 + 2×128×128 = 224 KiB) y el pool que queda es bastante más estrecho.
 - **Hardware real**, FAT y SLIM. Ver fase 7.
 
-## 4. Animación
+## 4. Animación — CÓDIGO ESCRITO, LISTO PARA VERIFICAR
 
-- [ ] 4.1 `src/uianim.c` + `include/uianim.h`: suavizado exponencial independiente del framerate, todo en `float`.
-- [ ] 4.2 Enganchar un delta de tiempo real al bucle de dibujado de `menusys.c`.
-- [ ] 4.3 Compilar el módulo con `-Wdouble-promotion` y dejarlo **sin avisos**.
+- [x] 4.1 `src/uianim.c` + `include/uianim.h`: suavizado exponencial independiente del framerate, todo en `float`. Dos primitivas, porque hacen falta las dos: `uiApproach()` (asintótica, para perseguir un objetivo que se mueve — el foco) y `uiAdvance()` + easings (con duración definida, para cuando «200 ms» tiene que significar 200 ms).
+- [x] 4.2 Enganchar un delta de tiempo real al bucle de dibujado. **Va en `guiStartFrame()` (gui.c), no en `menusys.c`**: ahí es donde empieza el frame de verdad, así que una sola muestra de reloj sirve a todos los elementos que animan, y todos ven el mismo delta. Reutiliza el `clock()` / `CLOCKS_PER_SEC` que OPL ya usa; no introduce un segundo reloj.
+- [x] 4.3 Compilar el módulo con `-Wdouble-promotion` y dejarlo **sin avisos**. ✅ Limpio, también con `-Wfloat-conversion`.
+
+**Detalle de robustez:** el delta se recorta a 60 ms (`UI_DT_MAX`). Sin eso, un tirón —escanear un dispositivo, arrancar el DVD— teletransportaría todas las animaciones a su destino de golpe.
 
 **Verificable:** una animación de 200 ms dura 200 ms tanto en PAL como en NTSC.
+
+**Pendiente de tu lado:** el panel de prueba de `gEnableBlurTest` ahora se desplaza con `uiApproach()`. En PCSX2 debería moverse suave. La equivalencia PAL/NTSC es correcta por construcción (el paso depende del tiempo transcurrido, no de que se llame a la función), pero medirla de verdad es fase 7.
 
 ## 5. Elementos de tema
 
@@ -78,7 +82,9 @@ Se adelantó al resto porque podía invalidar el diseño. Y lo hizo: ver `design
 - [x] 0.5 **Dimensionar las portadas.** **Hallazgo decisivo:** OPL sube las portadas a resolución NATIVA (`textures.c:477`) con un límite de 720×512×4 = **1,440 KiB por textura** (`textures.c:102`). Una sola portada puede ocupar casi todo el pool. Siete a tamaño nativo = 3–10 MiB: **imposible**. Decisión: tile fijo **128×192 en CT16 (48 KiB)**, reescalado en el EE al cargar. Ver `design.md`, Decisión 5.
 - [ ] 0.6 Validar el reescalado en el EE: medir el coste en ms de un filtro de caja sobre una portada de 720×512.
 
-## 7. Medición final (no opcional)
+## 7. Medición final (no opcional) — 🚧 BLOQUEADA: NO HAY CONSOLA FÍSICA
+
+Hoy sólo hay PCSX2, y PCSX2 **no sirve** para nada de esta fase: no modela el coste real del GS ni la presión sobre el pool del TexManager, que son justo las dos cosas que pueden tumbar el diseño. Sin estos números la PR de la fase 8 no es defendible — un mantenedor de OPL preguntará por ellos lo primero.
 
 - [ ] 7.1 Confirmar que el conjunto de trabajo del tema PS5 cabe en el pool encogido, en NTSC **y en PAL** (donde el margen es mucho menor).
 - [ ] 7.2 Medir fps en PS2 física en NTSC y PAL, con y sin blur. Buscar **thrashing**: la caída se vería como pérdida de fps, no como fallo visual.
