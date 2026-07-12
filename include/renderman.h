@@ -105,6 +105,15 @@ void rmDrawRect(int x, int y, int w, int h, u64 color);
  * panel. Cheap no-op when the blur is unavailable (hi-res mode, or no VRAM). */
 void rmBlurBackdrop(void);
 
+/** Like rmDrawPixmap, but forces alpha blending on, so the alpha of `color`
+ * fades the texture. rmDrawPixmap only enables blending for CT32, which makes
+ * the CT16 cover tiles impossible to crossfade. */
+void rmDrawPixmapBlend(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, short scaled, u64 color);
+
+/** Vertical gradient rectangle. One gouraud quad, so it costs the same as a
+ * flat one -- the GS interpolates the colour across the vertices for free. */
+void rmDrawRectGradient(int x, int y, int w, int h, u64 colorTop, u64 colorBottom);
+
 /** Draws a frosted-glass panel: the blurred backdrop showing through, with a
  * translucent tint composited on top.
  *

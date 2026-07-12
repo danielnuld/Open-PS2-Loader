@@ -399,6 +399,50 @@ void rmDrawRect(int x, int y, int w, int h, u64 color)
     order++;
 }
 
+/* Like rmDrawPixmap, but blends.
+ *
+ * rmDrawQuad decides on alpha from the pixel format, and only turns it on for
+ * CT32. That is right for every existing element, but it makes a CT16 texture
+ * impossible to fade -- and the cover tiles are CT16. Here alpha is forced on,
+ * so the alpha of `color` drives a crossfade: with the GS modulate, a texel of
+ * alpha 0x80 times a colour of alpha N comes out at N. */
+void rmDrawPixmapBlend(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, short scaled, u64 color)
+{
+    rm_quad_t quad;
+    rmSetupQuad(txt, x, y, aligned, w, h, scaled, color, &quad);
+
+    gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+    gsKit_set_test(gsGlobal, GS_ATEST_OFF);
+
+    gsKit_TexManager_bind(gsGlobal, quad.txt);
+    gsKit_prim_sprite_texture(gsGlobal, quad.txt,
+                              quad.ul.x + fRenderXOff, quad.ul.y + fRenderYOff,
+                              quad.ul.u, quad.ul.v,
+                              quad.br.x + fRenderXOff, quad.br.y + fRenderYOff,
+                              quad.br.u, quad.br.v, order, quad.color);
+    order++;
+}
+
+/* Vertical gradient. One gouraud quad: the GS interpolates the colour across
+   the vertices for free, so a veil that fades out costs exactly as much as a
+   flat rectangle. Drawn as a strip -- UL, UR, LL, LR. */
+void rmDrawRectGradient(int x, int y, int w, int h, u64 colorTop, u64 colorBottom)
+{
+    float fx = X_SCALE(x) + fRenderXOff;
+    float fy = Y_SCALE(y) + fRenderYOff;
+    float fw = X_SCALE(w);
+    float fh = Y_SCALE(h);
+
+    gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+    gsKit_prim_quad_gouraud(gsGlobal,
+                            fx, fy,
+                            fx + fw, fy,
+                            fx, fy + fh,
+                            fx + fw, fy + fh,
+                            order, colorTop, colorTop, colorBottom, colorBottom);
+    order++;
+}
+
 void rmDrawFrosted(int x, int y, int w, int h, u64 tint)
 {
     float fx = X_SCALE(x) + fRenderXOff;
