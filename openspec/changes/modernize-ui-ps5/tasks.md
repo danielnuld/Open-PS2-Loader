@@ -84,7 +84,22 @@ Se adelantó al resto porque podía invalidar el diseño. Y lo hizo: ver `design
 - [x] 0.3 Build de OPL con `DEBUG=1` (overlay de VRAM activo). `OPNPS2LD.ELF` generado.
 - [x] 0.4 **FIXED / TEXMAN reales confirmados en el overlay: 2,240 KiB / 1,856 KiB** (NTSC 640×448 CT24). Coincide con la contabilidad estática.
 - [x] 0.5 **Dimensionar las portadas.** **Hallazgo decisivo:** OPL sube las portadas a resolución NATIVA (`textures.c:477`) con un límite de 720×512×4 = **1,440 KiB por textura** (`textures.c:102`). Una sola portada puede ocupar casi todo el pool. Siete a tamaño nativo = 3–10 MiB: **imposible**. Decisión: tile fijo **128×192 en CT16 (48 KiB)**, reescalado en el EE al cargar. Ver `design.md`, Decisión 5.
-- [ ] 0.6 Validar el reescalado en el EE: medir el coste en ms de un filtro de caja sobre una portada de 720×512. **Arnés listo:** el build `DEBUG=1` reescala `background.png` una vez al arrancar y escribe los ms al log. Se eligió ese PNG a propósito: 1024×512 (más grande que el tope de 720×512 de una portada) **y paletizado**, así que es el peor caso y además ejercita el camino de paleta. Falta leer el número.
+- [x] 0.6 **Validado.** Medido sobre `background.png` (1024×512 paletizado — más grande que el tope de 720×512 de una portada, así que es peor caso):
+
+  | | PCSX2 |
+  |---|---|
+  | Decodificar el PNG | **152 ms** |
+  | Filtro de caja | **37 ms** |
+
+  **El reescalado es asumible, y por tres razones, no por una:**
+
+  1. **No bloquea el render.** Las portadas se cargan con `ioPutRequest(IO_CACHE_LOAD_ART)` → hilo de IO (`ioman.c:200`), no el de dibujado. Los 37 ms no tiran ni un frame.
+  2. **Es una fracción de lo que OPL ya paga.** Decodificar el PNG cuesta 152 ms *hoy*, sin tocar nada. El filtro añade un **+24%** a una operación que ya era cara y ya era asíncrona.
+  3. **Ocurre una vez por portada**, y el `image_cache_t` lo cachea.
+
+  Una portada real (512×720 ≈ 368k px, frente a 524k) sale proporcionalmente más barata.
+
+  ⚠️ **Números de PCSX2, no de consola.** El emulador no modela fielmente la velocidad del EE y suele correr el código escalar *más rápido* que el hardware real, así que el filtro podría ser bastante más caro en una PS2 física. Da el orden de magnitud y confirma que la idea es viable; **no cierra la fase 7**. Si en hardware resultara caro, la salida obvia es muestrear el filtro cada 2 píxeles (4× más rápido, poca pérdida visible a 128×192).
 
 ## 7. Medición final (no opcional) — 🚧 BLOQUEADA: NO HAY CONSOLA FÍSICA
 
