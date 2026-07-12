@@ -67,29 +67,61 @@ Iterar un box blur converge a un gaussiano. Cada pasada trabaja a 160×112 sobre
 
 Los buffers son **CT16S aunque el framebuffer sea CT24**: el resultado se ve desenfocado y escalado, la pérdida de precisión de color es invisible, y cuesta la mitad.
 
-## Decisión 4: presupuesto de VRAM y degradación
+## Decisión 4: presupuesto de VRAM — el riesgo NO es el que parecía
 
-Éste es el riesgo real del cambio. La eDRAM son 4 MiB y OPL ya los usa.
+La primera versión de este diseño decía: "si `gsKit_vram_alloc()` falla, degradar". **Eso era incorrecto**, y la medición del código lo destapó.
 
-| Modo | PSM | Framebuffers (×2) | Libre | Cadena de blur | % de lo libre |
-|---|---|---|---|---|---|
-| NTSC 640×448 | CT24 | 2,240 KiB | 1,856 KiB | 210 KiB | 11% |
-| 480p 640×448 | CT24 | 2,240 KiB | 1,856 KiB | 210 KiB | 11% |
-| PAL 640×512 | CT24 | 2,560 KiB | 1,536 KiB | 240 KiB | 16% |
-| 704×480 | CT24 | 2,640 KiB | 1,456 KiB | 232 KiB | 16% |
-| 720p / 1080i | CT16S | — | — | **deshabilitado** | no cabe |
+**OPL no mantiene las texturas residentes en VRAM.** Usa el TexManager de gsKit (`gsKit_TexManager_bind` / `_invalidate` / `_nextFrame`), que trata toda la VRAM posterior a `gsGlobal->CurrentPointer` como un **pool de streaming**: las texturas se suben bajo demanda y se desalojan. El propio OPL lo muestra en su overlay de debug:
+
+```c
+"%dKiB FIXED",  gsGlobal->CurrentPointer / 1024
+"%dKiB TEXMAN", (4*1024*1024 - gsGlobal->CurrentPointer) / 1024
+```
+
+La prueba de que el pool es imprescindible: **los assets integrados suman 6,508 KiB en CT32 — más que los 4 MiB de eDRAM total.** No caben ni queriendo. OPL los hace caber de dos formas:
+
+1. **PNG paletizados** para los assets grandes. `background.png` e `info.png` son 1024×512 con paleta de 4 bits → `GS_PSM_T4`: 256 KiB cada uno en vez de los 2 MiB que costarían en CT32.
+2. **Streaming**: lo que no cabe, se re-sube.
+
+### Qué implica esto para el blur
+
+Reservar los buffers de desenfoque con `gsKit_vram_alloc()` **nunca va a fallar**. Lo que hace es **encoger el pool de streaming**:
+
+| Modo | PSM | Framebuffers (FIXED) | Pool TEXMAN | Con blur (−210 KiB) |
+|---|---|---|---|---|
+| NTSC 640×448 | CT24 | 2,240 KiB | 1,856 KiB | 1,646 KiB (−11%) |
+| 480p 640×448 | CT24 | 2,240 KiB | 1,856 KiB | 1,646 KiB (−11%) |
+| PAL 640×512 | CT24 | 2,560 KiB | 1,536 KiB | 1,296 KiB (−16%) |
+| 720p / 1080i | CT16S | — | — | **deshabilitado** |
 
 Cuenta de la cadena en NTSC: `320·224·2 + 2·(160·112·2) = 143,360 + 71,680 = 215,040 B ≈ 210 KiB`.
 
-**Pero ese 1.8 MiB "libre" ya lo consumen** el atlas de fuentes, el fondo del tema, los iconos y las portadas. Un tema pesado puede no dejar sitio.
+**El fallo, si llega, no es un error de asignación: es thrashing.** Si el conjunto de trabajo de texturas por frame deja de caber en el pool encogido, el TexManager re-sube texturas por DMA en cada frame y el rendimiento cae. Se manifiesta como pérdida de fps, no como una pantalla en negro.
 
-Por eso:
+### La consecuencia inesperada: el `CardShelf` es más peligroso que el blur
 
-1. La cadena de blur se reserva **después** de que el tema cargue sus texturas — es la última en pedir, y por tanto la primera en quedarse sin.
-2. `gsKit_vram_alloc()` devuelve `GSKIT_ALLOC_ERROR` si no hay sitio. **Se comprueba.**
-3. Si falla, `rmBlurAvailable()` devuelve falso y `rmDrawFrosted()` degrada a un rectángulo con tinte sólido. La UI sigue siendo perfectamente usable — sólo pierde el efecto.
+El menú actual de OPL dibuja **una** portada a la vez (`ItemCover`). Nuestro `CardShelf` quiere dibujar **siete simultáneas**.
 
-Esto no es un plan B teórico: es el camino esperado en configuraciones con temas pesados, y hay que tratarlo como tal.
+Conjunto de trabajo estimado por frame con el tema PS5, en NTSC:
+
+| | |
+|---|---|
+| Fondo (T4, paletizado) | 256 KiB |
+| Atlas de fuentes (T8 256×256, hasta 4) | 64–256 KiB |
+| **7 portadas visibles** (CT32, ~140×200) | **~784 KiB** |
+| Iconos y varios | ~100 KiB |
+| **Total** | **~1,200–1,400 KiB** |
+
+Contra un pool de 1,646 KiB con el blur activo. **Cabe, pero el margen es estrecho** — y se estrecha más en PAL (1,296 KiB de pool), donde probablemente NO cabe.
+
+Mitigaciones, en orden de preferencia:
+
+1. **Reducir el tamaño de las portadas del shelf.** Las tarjetas no enfocadas se dibujan a ~90 px: no necesitan una textura de 140×200. Una mipmap-lite o un reescalado en carga corta el coste a la mitad o menos.
+2. **Paletizar las portadas** (T8), como OPL ya hace con sus propios assets. Divide por 4.
+3. **Limitar las tarjetas visibles** en PAL.
+4. Como último recurso, desactivar el blur en PAL.
+
+**Este es el hallazgo que cambia el plan.** El blur cuesta 210 KiB y es asumible. El `CardShelf` puede costar 784 KiB, y ése es el verdadero consumidor. Hay que dimensionar las portadas antes de escribir el elemento.
 
 ## Decisión 5: animación por tiempo, no por frames
 

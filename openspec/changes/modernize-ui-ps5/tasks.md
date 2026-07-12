@@ -55,10 +55,20 @@ Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. E
 
 **Verificable:** el tema PS5 seleccionable y usable de punta a punta.
 
-## 7. Medición (no opcional)
+## 0. Medición previa — HECHA PARCIALMENTE
 
-- [ ] 7.1 Medir la VRAM libre real tras cargar los temas populares. Confirmar si los 210 KiB del blur caben. **Este dato decide si el efecto es viable en la práctica o es sólo para temas ligeros.**
-- [ ] 7.2 Medir fps en PS2 física en NTSC y PAL, con y sin blur.
+Se adelantó al resto porque podía invalidar el diseño. Y lo hizo: ver `design.md`, Decisión 4.
+
+- [x] 0.1 Auditar quién consume VRAM. **Hallazgo:** OPL usa el TexManager de gsKit; la VRAM tras `CurrentPointer` es un *pool de streaming*, no memoria residente. El blur no puede "fallar al reservar" — encoge el pool.
+- [x] 0.2 Medir los assets integrados. **Hallazgo:** suman 6,508 KiB en CT32, más que la eDRAM total. OPL los hace caber paletizando (`background.png` e `info.png` son 1024×512 T4 = 256 KiB en vez de 2 MiB).
+- [x] 0.3 Build de OPL con `DEBUG=1` (overlay de VRAM activo). `OPNPS2LD.ELF` generado.
+- [ ] 0.4 **Leer FIXED y TEXMAN reales** en el overlay, en PCSX2 y en consola.
+- [ ] 0.5 **Dimensionar las portadas del `CardShelf`.** Es el consumidor grande (~784 KiB con 7 portadas CT32), no el blur (210 KiB). Decidir tamaño y formato ANTES de escribir el elemento.
+
+## 7. Medición final (no opcional)
+
+- [ ] 7.1 Confirmar que el conjunto de trabajo del tema PS5 cabe en el pool encogido, en NTSC **y en PAL** (donde el margen es mucho menor).
+- [ ] 7.2 Medir fps en PS2 física en NTSC y PAL, con y sin blur. Buscar **thrashing**: la caída se vería como pérdida de fps, no como fallo visual.
 - [ ] 7.3 Probar en consola FAT y en SLIM.
 - [ ] 7.4 Documentar los resultados en el propio cambio antes de archivarlo.
 

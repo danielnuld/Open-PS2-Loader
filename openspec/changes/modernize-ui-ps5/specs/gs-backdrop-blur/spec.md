@@ -19,23 +19,31 @@ El desenfoque SHALL exponerse mediante `rmBlurBackdrop()`, que captura el frameb
 - **THEN** los primitivos encolados previamente SHALL haberse ejecutado ya contra el destino anterior
 - **AND** ningún primitivo SHALL dibujarse en un destino distinto al que le correspondía
 
-### Requirement: Presupuesto de VRAM verificado en runtime
+### Requirement: El desenfoque no debe estrangular el pool del TexManager
 
-La cadena de desenfoque SHALL reservar su VRAM sólo después de que el tema haya cargado sus texturas, y SHALL verificar que la reserva tuvo éxito antes de habilitarse.
+OPL no mantiene las texturas residentes en VRAM: usa el **TexManager de gsKit**, que trata toda la VRAM posterior a `gsGlobal->CurrentPointer` como un *pool de streaming* y re-sube las texturas bajo demanda.
 
-El sistema NO SHALL asumir que la VRAM está disponible: los 4 MiB de eDRAM son el recurso escaso y un tema pesado puede agotarlos.
+Por tanto, reservar los buffers de desenfoque con `gsKit_vram_alloc()` **no falla**: simplemente **encoge el pool**. El riesgo real NO es quedarse sin memoria, sino que el conjunto de trabajo de texturas por frame deje de caber en el pool, provocando re-subidas por DMA en cada frame (*thrashing*) y una caída de rendimiento.
 
-#### Scenario: No hay VRAM suficiente
+El sistema SHALL reservar los buffers de desenfoque como memoria FIXED durante la inicialización, y SHALL garantizar que el pool restante no baje de un mínimo verificado por medición.
 
-- **WHEN** la reserva de los buffers de desenfoque falla por falta de VRAM
+#### Scenario: El pool restante es insuficiente
+
+- **WHEN** reservar el desenfoque dejaría el pool del TexManager por debajo del mínimo requerido por el tema activo
 - **THEN** el desenfoque SHALL quedar deshabilitado
-- **AND** la interfaz SHALL seguir renderizando correctamente
-- **AND** los paneles de cristal SHALL caer a un tinte sólido sin desenfoque
+- **AND** los paneles de cristal SHALL caer a un tinte sólido
+- **AND** la interfaz SHALL seguir renderizando correctamente y a 60 fps
 
 #### Scenario: Modo de alta resolución
 
 - **WHEN** el modo de vídeo activo es 720p o 1080i
 - **THEN** el desenfoque SHALL estar deshabilitado sin intentar reservar VRAM
+
+#### Scenario: Sin thrashing de texturas
+
+- **WHEN** el desenfoque está activo con el tema PS5
+- **THEN** el conjunto de trabajo de texturas por frame SHALL caber en el pool restante del TexManager
+- **AND** NO SHALL producirse re-subida de texturas por DMA en cada frame
 
 ### Requirement: Panel de cristal esmerilado
 
