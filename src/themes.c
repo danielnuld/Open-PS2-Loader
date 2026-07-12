@@ -1275,21 +1275,32 @@ static void drawCoverWallpaper(struct menu_list *menu, struct submenu_list *item
 
     wp->fade = uiAdvance(wp->fade, wp->fadeTime, uiAnimDelta());
 
-    const float t = uiEaseInOutCubic(wp->fade);
+    if (wp->fade >= 1.0f) {
+        /* Steady state, which is nearly every frame. No crossfade is in flight,
+           so the outgoing layer would be painted over in full: drawing it is a
+           whole screen of fill thrown away. Fill is the GS budget that actually
+           matters here, so skip it. */
+        if (wp->current)
+            rmDrawPixmap(wp->current, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol);
+        else
+            rmDrawRect(0, 0, screenWidth, screenHeight, gColBlack);
+    } else {
+        const float t = uiEaseInOutCubic(wp->fade);
 
-    // Outgoing art, full screen. The tile is only 128x192, but it is about to
-    // be blurred into mush, so stretching it is free and costs no extra VRAM.
-    if (wp->prev && wp->prev->Mem)
-        rmDrawPixmap(wp->prev, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol);
-    else
-        rmDrawRect(0, 0, screenWidth, screenHeight, gColBlack);
+        // Outgoing art. The tile is only 128x192, but it is about to be blurred
+        // into mush, so stretching it is free and costs no extra VRAM.
+        if (wp->prev && wp->prev->Mem)
+            rmDrawPixmap(wp->prev, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol);
+        else
+            rmDrawRect(0, 0, screenWidth, screenHeight, gColBlack);
 
-    // Incoming art, faded in over it.
-    if (wp->current) {
-        const u32 a = (u32)(0x80 * t);
+        // Incoming art, faded in over it.
+        if (wp->current) {
+            const u32 a = (u32)(0x80 * t);
 
-        rmDrawPixmapBlend(wp->current, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE,
-                          GS_SETREG_RGBA(0x80, 0x80, 0x80, a));
+            rmDrawPixmapBlend(wp->current, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE,
+                              GS_SETREG_RGBA(0x80, 0x80, 0x80, a));
+        }
     }
 
     /* Now blur the lot. The chain samples the FRAMEBUFFER, which at this point
