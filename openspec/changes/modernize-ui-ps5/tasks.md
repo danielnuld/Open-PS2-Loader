@@ -24,13 +24,16 @@ Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. E
 
 **Verificable:** una pantalla de prueba muestra el fondo desenfocado. Medir el coste con `rmEndFrame` y confirmar que quedan 60 fps.
 
-## 3. `rmDrawFrosted()`
+## 3. `rmDrawFrosted()` — CÓDIGO ESCRITO, LISTO PARA VERIFICAR
 
-- [ ] 3.1 Dibujar el backdrop desenfocado en la región, **sin blending** (no depender del alpha de 1 bit del framebuffer).
-- [ ] 3.2 Componer el tinte encima, ese sí con blending.
-- [ ] 3.3 Camino de degradación: si `!rmBlurAvailable()`, dibujar sólo el tinte.
+- [x] 3.1 Dibujar el backdrop desenfocado en la región, **sin blending** (no depender del alpha de 1 bit del framebuffer). Vive en `renderman.c`, que es donde están `X_SCALE()` y `fRenderXOff` — los que mapean la región lógica de 640×480 a píxeles reales del framebuffer, y por tanto a UVs de la cadena.
+- [x] 3.2 Componer el tinte encima, ese sí con blending.
+- [x] 3.3 Camino de degradación: si no hay cadena, `rmBlurTexture()` devuelve `NULL` y se dibuja sólo el tinte. Siempre es seguro llamarla.
+- [x] 3.4 **Punto de llamada.** Nada llamaba a `rmBlurBackdrop()`, así que el enlazador se comía el módulo entero. Añadido un test puntual en `guiShow()` bajo `#ifdef __DEBUG` (`gEnableBlurTest`), que es lo que hace verificable la tarea 1.4. El tema PS5 lo sustituirá en la fase 6.
 
 **Verificable:** un panel de cristal sobre el menú actual de OPL, sin tocar ningún tema.
+
+**Pendiente de tu lado:** compila y enlaza (`rmDrawFrosted`, `rmBlurBackdrop` y `rmBlurTexture` están en el ELF). Falta abrir `OPNPS2LD.ELF` (build `DEBUG=1`) en PCSX2 y mirar. El medidor de FPS que ya trae el build de debug es el que contesta si la cadena deja los 60 Hz.
 
 ## 4. Animación
 
