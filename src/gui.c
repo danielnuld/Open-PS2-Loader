@@ -7,6 +7,7 @@
 #include "include/opl.h"
 #include "include/gui.h"
 #include "include/renderman.h"
+#include "include/uianim.h"
 #include "include/menusys.h"
 #include "include/fntsys.h"
 #include "include/ioman.h"
@@ -187,6 +188,9 @@ void guiUnlock(void)
 void guiStartFrame(void)
 {
     guiLock();
+    // One clock sample per frame, before anything draws, so every element that
+    // animates this frame sees the same delta.
+    uiAnimTick();
     rmStartFrame();
     guiFrameId++;
 }
@@ -1525,8 +1529,20 @@ static void guiShow()
     // rmBlurBackdrop(), and without a call site the linker drops the module.
     // Debug builds only -- it must never reach a release ELF.
     if (gEnableBlurTest) {
+        // Slide the panel back and forth through uiApproach(), so the animation
+        // module is actually exercised: if it is time-based, the sweep takes the
+        // same wall-clock time in PAL at 50 Hz as in NTSC at 60 Hz. Frame-based
+        // easing would visibly crawl in PAL.
+        static float panelX = 40.0f;
+        static float panelTarget = 40.0f;
+
+        if (panelX > panelTarget - 1.0f && panelX < panelTarget + 1.0f)
+            panelTarget = (panelTarget > 60.0f) ? 40.0f : 120.0f;
+
+        panelX = uiApproach(panelX, panelTarget, 4.0f, uiAnimDelta());
+
         rmBlurBackdrop();
-        rmDrawFrosted(80, 60, 480, 360, GS_SETREG_RGBA(0x20, 0x20, 0x30, 0x40));
+        rmDrawFrosted((int)panelX, 60, 480, 360, GS_SETREG_RGBA(0x20, 0x20, 0x30, 0x40));
     }
 #endif
 }
