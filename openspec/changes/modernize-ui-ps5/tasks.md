@@ -2,21 +2,25 @@
 
 Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. El emulador no modela el coste del GS ni la presión de VRAM.
 
-## 1. Base: render-to-texture
+## 1. Base: render-to-texture — CÓDIGO ESCRITO, SIN VERIFICAR
 
-- [ ] 1.1 Crear `src/rmblur.c` + `include/rmblur.h` con la superficie mínima: `rmBlurInit`, `rmBlurEnd`, `rmBlurBackdrop`, `rmBlurTexture`, `rmBlurAvailable`.
-- [ ] 1.2 Implementar el bind/restore del render target vía `ScreenBuffer[]` + `gsKit_setactive()`. **Vaciar la cola con `gsKit_queue_exec()` antes de cada cambio de destino** (ver design.md, Decisión 2).
-- [ ] 1.3 Reservar los buffers CT16S con `gsKit_vram_alloc()` y **comprobar `GSKIT_ALLOC_ERROR`**. Si falla, dejar el módulo deshabilitado.
+- [x] 1.1 Crear `src/rmblur.c` + `include/rmblur.h` con la superficie mínima: `rmBlurInit`, `rmBlurEnd`, `rmBlurBackdrop`, `rmBlurTexture`, `rmBlurAvailable`.
+- [x] 1.2 Implementar el bind/restore del render target vía `ScreenBuffer[]` + `gsKit_setactive()`. **Vaciar la cola con `gsKit_queue_exec()` antes de cada cambio de destino** (ver design.md, Decisión 2). Se salva y restaura también `PSM`, que `gsKit_setactive()` mete en `FRAME`.
+- [x] 1.3 Reservar los buffers CT16S con `gsKit_vram_alloc()` y **comprobar `GSKIT_ALLOC_ERROR`**. Si falla, dejar el módulo deshabilitado. **Van en `GSKIT_ALLOC_SYSBUFFER`**: `FRAME.FBP` direcciona en unidades de 8 KiB y `USERBUFFER` sólo alinea a 256 (ver design.md).
 - [ ] 1.4 Prueba puntual: renderizar un color plano a un RT y volcarlo a pantalla. Confirma bind, restore y orden de cola.
+
+**Estado:** `rmblur.c` compila limpio (sin avisos) y enlaza dentro de `OPNPS2LD.ELF`. Pero **nada llama todavía a `rmBlurBackdrop()`** — el enlazador se come esa función por falta de referencias. No se ha verificado ni un píxel. El punto de enganche es `rmDrawFrosted()`, fase 3.
 
 **Verificable:** el RT se dibuja en pantalla y el resto del frame no se corrompe.
 
-## 2. La cadena de desenfoque
+## 2. La cadena de desenfoque — CÓDIGO ESCRITO, SIN VERIFICAR
 
-- [ ] 2.1 Pirámide de reducción: framebuffer → 320×224 → 160×112, bilineal, `PrimAlphaEnable = OFF`.
-- [ ] 2.2 Cuatro pasadas de ping-pong con desplazamiento creciente de téxel.
-- [ ] 2.3 Derivar los tamaños de los RT del modo de vídeo activo (PAL es 512 de alto). Mantener los anchos **múltiplos de 64** (restricción de `TBW`).
-- [ ] 2.4 Deshabilitar el blur cuando `hires` esté activo (720p/1080i).
+- [x] 2.1 Pirámide de reducción: framebuffer → 320×H/2 → 128×H/4, bilineal, `PrimAlphaEnable = OFF`.
+- [x] 2.2 Cuatro pasadas de ping-pong. Los offsets **alternan signo** (`{+0.5, −0.5, +1.5, −1.5}`): la magnitud crece pero suman cero, así la imagen no se arrastra.
+- [x] 2.3 Derivar los tamaños de los RT del modo de vídeo activo (las alturas salen de `gsGlobal->Height`). Anchos **múltiplos exactos de 64**.
+- [x] 2.4 Deshabilitar el blur cuando `hires` esté activo (720p/1080i).
+
+**Corrección de diseño (hallazgo al implementar):** el diseño decía que el segundo nivel era 160×112 y que 160 era múltiplo de 64. **No lo es.** gsKit escribe ese buffer con `FRAME.FBW = Width/64` (trunca → 2) y lo lee con `TEX0.TBW = ceil(Width/64)` (→ 3): stride de escritura 128, stride de lectura 192, contenido rasgado. El segundo nivel pasa a **128** de ancho. Ver design.md.
 
 **Verificable:** una pantalla de prueba muestra el fondo desenfocado. Medir el coste con `rmEndFrame` y confirmar que quedan 60 fps.
 
@@ -40,7 +44,8 @@ Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. E
 
 - [ ] 5.1 Añadir `FrostedPanel` **al final** de `elementsType[]` (no reordenar) con su `init`/`draw`.
 - [ ] 5.2 Añadir `CardShelf` igual: fila horizontal, foco que crece y se eleva, no enfocadas atenuadas.
-- [ ] 5.3 `CardShelf` reutiliza el arte de portadas que OPL ya gestiona (`ItemCover` / caché `ART`). Reserva con el título cuando no haya portada.
+- [ ] 5.3 **Reescalador de portadas en el EE**: filtro de caja de la imagen nativa a un tile de 128×192 CT16, con caché. La imagen nativa NUNCA sube a VRAM. Es prerrequisito duro del `CardShelf` (ver 0.5).
+- [ ] 5.3b `CardShelf` consume esos tiles. Reserva con el título cuando no haya portada.
 - [ ] 5.4 Culling: dibujar sólo las tarjetas visibles o adyacentes.
 - [ ] 5.5 **Regresión:** cargar un tema antiguo y confirmar que renderiza idéntico y que no reserva VRAM de blur.
 
@@ -62,8 +67,9 @@ Se adelantó al resto porque podía invalidar el diseño. Y lo hizo: ver `design
 - [x] 0.1 Auditar quién consume VRAM. **Hallazgo:** OPL usa el TexManager de gsKit; la VRAM tras `CurrentPointer` es un *pool de streaming*, no memoria residente. El blur no puede "fallar al reservar" — encoge el pool.
 - [x] 0.2 Medir los assets integrados. **Hallazgo:** suman 6,508 KiB en CT32, más que la eDRAM total. OPL los hace caber paletizando (`background.png` e `info.png` son 1024×512 T4 = 256 KiB en vez de 2 MiB).
 - [x] 0.3 Build de OPL con `DEBUG=1` (overlay de VRAM activo). `OPNPS2LD.ELF` generado.
-- [ ] 0.4 **Leer FIXED y TEXMAN reales** en el overlay, en PCSX2 y en consola.
-- [ ] 0.5 **Dimensionar las portadas del `CardShelf`.** Es el consumidor grande (~784 KiB con 7 portadas CT32), no el blur (210 KiB). Decidir tamaño y formato ANTES de escribir el elemento.
+- [x] 0.4 **FIXED / TEXMAN reales confirmados en el overlay: 2,240 KiB / 1,856 KiB** (NTSC 640×448 CT24). Coincide con la contabilidad estática.
+- [x] 0.5 **Dimensionar las portadas.** **Hallazgo decisivo:** OPL sube las portadas a resolución NATIVA (`textures.c:477`) con un límite de 720×512×4 = **1,440 KiB por textura** (`textures.c:102`). Una sola portada puede ocupar casi todo el pool. Siete a tamaño nativo = 3–10 MiB: **imposible**. Decisión: tile fijo **128×192 en CT16 (48 KiB)**, reescalado en el EE al cargar. Ver `design.md`, Decisión 5.
+- [ ] 0.6 Validar el reescalado en el EE: medir el coste en ms de un filtro de caja sobre una portada de 720×512.
 
 ## 7. Medición final (no opcional)
 

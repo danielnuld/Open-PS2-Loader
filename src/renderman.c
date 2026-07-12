@@ -9,6 +9,7 @@
 
 #include "include/opl.h"
 #include "include/renderman.h"
+#include "include/rmblur.h"
 #include "include/ioman.h"
 
 // Allocateable space in vram, as indicated in GsKit's code
@@ -238,6 +239,10 @@ int rmSetMode(int force)
             gsKit_sync_flip(gsGlobal);
         }
 
+        // Claims its VRAM out of what is left after the framebuffers, so it
+        // has to come after gsKit_init_screen() has moved CurrentPointer.
+        rmBlurInit(hires);
+
         LOG("RENDERMAN New vmode: %d, %d x %d\n", vmode, gsGlobal->Width, gsGlobal->Height);
     }
 
@@ -263,6 +268,8 @@ void rmGetScreenExtents(int *w, int *h)
 
 void rmEnd(void)
 {
+    rmBlurEnd();
+
     if (hires) {
         gsKit_hires_deinit_global(gsGlobal);
     } else {
