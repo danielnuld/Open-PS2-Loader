@@ -108,6 +108,12 @@ typedef struct theme
     u64 uiTextColor;
     u64 selTextColor;
 
+    /// Highlight bar behind the selected row in the config dialogs. Optional:
+    /// when the theme does not set `hover_color`, `hasHoverColor` stays 0 and
+    /// dia.c keeps its original behaviour exactly, so no existing theme moves.
+    u64 hoverColor;
+    int hasHoverColor;
+
     theme_elems_t mainElems;
     theme_elems_t infoElems;
     theme_element_t *gamesItemsList;

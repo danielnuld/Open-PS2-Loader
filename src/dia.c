@@ -38,12 +38,34 @@ static int screenHeight;
 #define KEYB_HEIGHT 4
 #define KEYB_ITEMS  (KEYB_WIDTH * KEYB_HEIGHT)
 
+/* Opacity of the highlight bar, on the GS scale where 0x80 is fully opaque.
+   Two levels so "selected" and "selected and being edited" differ by weight
+   rather than by hue.
+
+   Both are deliberately stronger than the 0x50 the original code used for
+   everything: that value had to be gentle because the bar was drawn in
+   textColor, the same colour as the body text, and anything denser would have
+   swallowed the row. A dedicated hover colour does not have that problem. */
+#define DIA_HOVER_ALPHA 0x58
+#define DIA_FOCUS_ALPHA 0x78
+
 static void diaDrawBoundingBox(int x, int y, int w, int h, int focus)
 {
-    u64 color = focus ? gTheme->selTextColor : gTheme->textColor;
+    u64 color;
 
-    color |= GS_SETREG_RGBA(0, 0, 0, 0xFF);
-    color &= gColFocus;
+    if (gTheme->hasHoverColor) {
+        /* Both states come from one themeable colour. The original code drew
+           the merely-selected row in textColor -- the same colour as the body
+           text -- so on a busy or bright background the selection was very hard
+           to pick out. */
+        color = gTheme->hoverColor;
+        color |= GS_SETREG_RGBA(0, 0, 0, 0xFF);
+        color &= GS_SETREG_RGBA(0xFF, 0xFF, 0xFF, focus ? DIA_FOCUS_ALPHA : DIA_HOVER_ALPHA);
+    } else {
+        color = focus ? gTheme->selTextColor : gTheme->textColor;
+        color |= GS_SETREG_RGBA(0, 0, 0, 0xFF);
+        color &= gColFocus;
+    }
 
     rmDrawRect(x - 5, y, w + 10, h + 10, color);
 }

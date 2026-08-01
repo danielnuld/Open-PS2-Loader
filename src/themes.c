@@ -1687,6 +1687,7 @@ static void thmSetColors(theme_t *theme)
     theme->textColor = GS_SETREG_RGBA(gDefaultTextColor[0], gDefaultTextColor[1], gDefaultTextColor[2], 0x80);
     theme->uiTextColor = GS_SETREG_RGBA(gDefaultUITextColor[0], gDefaultUITextColor[1], gDefaultUITextColor[2], 0x80);
     theme->selTextColor = GS_SETREG_RGBA(gDefaultSelTextColor[0], gDefaultSelTextColor[1], gDefaultSelTextColor[2], 0x80);
+    theme->hasHoverColor = 0;
 
     theme_element_t *elem = theme->mainElems.first;
     while (elem) {
@@ -1790,6 +1791,14 @@ static void thmLoad(const char *themePath)
 
     if (configGetColor(themeConfig, "sel_text_color", color))
         newT->selTextColor = GS_SETREG_RGBA(color[0], color[1], color[2], 0x80);
+
+    /* Optional. Without it dia.c behaves exactly as before, which is what keeps
+       every existing theme rendering identically. */
+    if (configGetColor(themeConfig, "hover_color", color)) {
+        newT->hoverColor = GS_SETREG_RGBA(color[0], color[1], color[2], 0x80);
+        newT->hasHoverColor = 1;
+        LOG("THEMES hover_color = %02x %02x %02x\n", color[0], color[1], color[2]);
+    }
 
     // before loading the element definitions, we have to have the fonts prepared
     // for that, we load the fonts and a translation table
