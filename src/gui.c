@@ -7,6 +7,7 @@
 #include "include/opl.h"
 #include "include/gui.h"
 #include "include/renderman.h"
+#include "include/uianim.h"
 #include "include/menusys.h"
 #include "include/fntsys.h"
 #include "include/ioman.h"
@@ -59,6 +60,13 @@ static void guiShow();
 static clock_t prevtime = 0;
 static clock_t curtime = 0;
 static float fps = 0.0f;
+
+// Spot test for the blur chain (tasks 1.4 / 0.6). Off now that FrostedPanel and
+// CardShelf exist: the PS5 theme is the real path, and leaving this on would
+// draw a second panel over it and blur the frame twice. Flip to 1 to exercise
+// the chain without a theme installed -- it also re-runs the cover rescaler and
+// puts its PNG/BOX timings back on the overlay.
+static int gEnableBlurTest = 0;
 
 extern GSGLOBAL *gsGlobal;
 #endif
@@ -183,6 +191,9 @@ void guiUnlock(void)
 void guiStartFrame(void)
 {
     guiLock();
+    // One clock sample per frame, before anything draws, so every element that
+    // animates this frame sees the same delta.
+    uiAnimTick();
     rmStartFrame();
     guiFrameId++;
 }
@@ -1340,7 +1351,12 @@ int guiAlignMenuHints(menu_hint_item_t *hint, int font, int width)
 
     for (; hint; hint = hint->next) {
         GSTEXTURE *iconTex = thmGetTexture(hint->icon_id);
-        w = (iconTex->Width * 20) / iconTex->Height;
+        // thmGetTexture returns NULL for any texture that never loaded, which is
+        // the normal state of a theme with use_default=0 that ships no images.
+        // Every other call site in OPL checks; these two did not, and the width
+        // is also a division by iconTex->Height. guiDrawIconAndText below skips
+        // the icon in the same case, so zero is the width that matches.
+        w = iconTex ? (iconTex->Width * 20) / iconTex->Height : 0;
         char *text = _l(hint->text_id);
 
         x -= rmWideScale(w) + 2;
@@ -1362,7 +1378,7 @@ int guiAlignSubMenuHints(int hintCount, int *textID, int *iconID, int font, int 
 
     for (i = 0; i < hintCount; i++) {
         GSTEXTURE *iconTex = thmGetTexture(iconID[i]);
-        w = (iconTex->Width * 20) / iconTex->Height;
+        w = iconTex ? (iconTex->Width * 20) / iconTex->Height : 0; // see guiAlignMenuHints
         char *text = _l(textID[i]);
 
         x -= rmWideScale(w) + 2;
@@ -1449,6 +1465,19 @@ static void guiDrawOverlays()
         fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
         y += yadd;
     }
+
+    // Task 0.6: cost of rescaling a cover on the EE. Measured once, at load.
+    if (gCoverFilterMs >= 0) {
+        y += yadd; // Empty line
+
+        snprintf(text, sizeof(text), "PNG %dms", gCoverDecodeMs);
+        fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
+        y += yadd;
+
+        snprintf(text, sizeof(text), "BOX %dms", gCoverFilterMs);
+        fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
+        y += yadd;
+    }
 #endif
 
     // Last Played Auto Start
@@ -1514,6 +1543,46 @@ static void guiShow()
     } else
         // render with the set screen handler
         screenHandler->renderScreen();
+
+#ifdef __DEBUG
+    // Spot test for the blur chain (tasks 1.4 / 3.x). The theme system is what
+    // will drive this for real; until then, this is the only thing that calls
+    // rmBlurBackdrop(), and without a call site the linker drops the module.
+    // Debug builds only -- it must never reach a release ELF.
+    if (gEnableBlurTest) {
+        // Slide the panel back and forth through uiApproach(), so the animation
+        // module is actually exercised: if it is time-based, the sweep takes the
+        // same wall-clock time in PAL at 50 Hz as in NTSC at 60 Hz. Frame-based
+        // easing would visibly crawl in PAL.
+        static float panelX = 40.0f;
+        static float panelTarget = 40.0f;
+
+        if (panelX > panelTarget - 1.0f && panelX < panelTarget + 1.0f)
+            panelTarget = (panelTarget > 60.0f) ? 40.0f : 120.0f;
+
+        panelX = uiApproach(panelX, panelTarget, 4.0f, uiAnimDelta());
+
+        rmBlurBackdrop();
+        rmDrawFrosted((int)panelX, 60, 480, 360, GS_SETREG_RGBA(0x20, 0x20, 0x30, 0x40));
+
+        // Task 0.6: time the EE box filter against a known worst case. MAIN_BG
+        // is background.png -- 1024x512 and palettized, so it is both bigger
+        // than the 720x512 cover cap and exercises the palette path. Rescaled
+        // once; the ms lands in the ps2link log. The tile is drawn so the
+        // filter's output can actually be looked at, not just timed.
+        static GSTEXTURE coverTile;
+        static int coverTried = 0;
+
+        if (!coverTried) {
+            coverTried = 1;
+            if (texLoadCoverInternal(&coverTile, MAIN_BG) < 0)
+                coverTile.Mem = NULL;
+        }
+
+        if (coverTile.Mem)
+            rmDrawPixmap(&coverTile, 480, 300, ALIGN_CENTER, 128, 192, SCALING_NONE, gDefaultCol);
+    }
+#endif
 }
 
 void guiIntroLoop(void)

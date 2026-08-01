@@ -956,14 +956,23 @@ void menuRenderMain(void)
 
 void menuHandleInputMain()
 {
+    /* A CardShelf lays the games out along X, so left/right has to walk the
+       games and up/down change device page -- the opposite of the vertical
+       list. Reading the axes through these two pointers keeps the rest of the
+       handler identical for both layouts. */
+    void (*walkItems)(void) = gTheme->horizontalItems ? &menuNextV : &menuNextH;
+    void (*walkItemsBack)(void) = gTheme->horizontalItems ? &menuPrevV : &menuPrevH;
+    void (*walkPages)(void) = gTheme->horizontalItems ? &menuNextH : &menuNextV;
+    void (*walkPagesBack)(void) = gTheme->horizontalItems ? &menuPrevH : &menuPrevV;
+
     if (getKey(KEY_LEFT)) {
-        menuPrevH();
+        walkItemsBack();
     } else if (getKey(KEY_RIGHT)) {
-        menuNextH();
+        walkItems();
     } else if (getKey(KEY_UP)) {
-        menuPrevV();
+        walkPagesBack();
     } else if (getKey(KEY_DOWN)) {
-        menuNextV();
+        walkPages();
     } else if (getKeyOn(KEY_CROSS)) {
         selected_item->item->execCross(selected_item->item);
     } else if (getKeyOn(KEY_TRIANGLE)) {

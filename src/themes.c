@@ -3,6 +3,7 @@
 #include "include/util.h"
 #include "include/gui.h"
 #include "include/renderman.h"
+#include "include/uianim.h"
 #include "include/textures.h"
 #include "include/ioman.h"
 #include "include/fntsys.h"
@@ -48,6 +49,14 @@ enum ELEM_ATTRIBUTE_TYPE {
     ELEM_TYPE_LOADING_ICON,
     ELEM_TYPE_BDM_INDEX,
     ELEM_TYPE_GAME_COUNT_TEXT,
+    // New types go at the END, and nothing above is reordered. A theme that
+    // does not name them never instantiates them, reserves no blur VRAM, and
+    // renders exactly as before. That is also the condition for this being
+    // upstreamable: a UI rewrite never merges, an additive element type does.
+    ELEM_TYPE_FROSTED_PANEL,
+    ELEM_TYPE_CARD_SHELF,
+    ELEM_TYPE_COVER_WALLPAPER,
+    ELEM_TYPE_ITEM_TITLE,
     ELEM_TYPE_COUNT
 };
 
@@ -76,7 +85,11 @@ static const char *elementsType[ELEM_TYPE_COUNT] = {
     "InfoHintText",
     "LoadingIcon",
     "BdmIndex",
-    "GameCountText"};
+    "GameCountText",
+    "FrostedPanel",
+    "CardShelf",
+    "CoverWallpaper",
+    "ItemTitle"};
 
 // Common functions for Text ////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -944,9 +957,15 @@ static void drawInfoHintText(struct menu_list *menu, struct submenu_list *item, 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// A CoverWallpaper covers the screen and IS the background, so it counts as one
+// here. Without this, OPL would prepend a default BG_ART element in front of it:
+// a full-screen draw that is then painted over completely, plus a cache nobody
+// reads.
+#define ELEM_IS_BACKGROUND(t) (((t) == ELEM_TYPE_BACKGROUND) || ((t) == ELEM_TYPE_COVER_WALLPAPER))
+
 static void validateBackgroundElems(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_elems_t *mainElems, theme_elems_t *infoElems)
 {
-    if (!mainElems->first || (mainElems->first->type != ELEM_TYPE_BACKGROUND)) {
+    if (!mainElems->first || !ELEM_IS_BACKGROUND(mainElems->first->type)) {
         LOG("THEMES No valid background found for main, add default BG_ART\n");
         theme_element_t *backgroundElem = initBasic(themePath, themeConfig, theme, "bg", ELEM_TYPE_BACKGROUND, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol, theme->fonts[0]);
         initBackground(themePath, themeConfig, theme, backgroundElem, "bg", "BG", 1, NULL);
@@ -955,7 +974,7 @@ static void validateBackgroundElems(const char *themePath, config_set_t *themeCo
     }
 
     if (infoElems->first) {
-        if (infoElems->first->type != ELEM_TYPE_BACKGROUND) {
+        if (!ELEM_IS_BACKGROUND(infoElems->first->type)) {
             LOG("THEMES No valid background found for info, add default BG_ART\n");
             theme_element_t *backgroundElem = initBasic(themePath, themeConfig, theme, "bg", ELEM_TYPE_BACKGROUND, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol, theme->fonts[0]);
             initBackground(themePath, themeConfig, theme, backgroundElem, "bg", "BG", 1, NULL);
@@ -965,10 +984,20 @@ static void validateBackgroundElems(const char *themePath, config_set_t *themeCo
     }
 }
 
-static void validateItemsList(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_element_t *list, theme_elems_t *mainElems)
+/* `list` is the theme's gamesItemsList / appsItemsList slot, and it is taken by
+   ADDRESS on purpose: when no ItemsList is declared, the default built here has
+   to be written back into it. menusys.c reads
+
+       ((items_list_t *)gTheme->itemsList->extended)->displayedItems
+
+   with no NULL check, from menuNextV/menuPrevV/menuNextH/menuPrevH -- so a slot
+   left NULL is a null dereference on the first press of the D-pad, which on the
+   EE is an unhandled exception, i.e. a hard freeze. Splicing the element into
+   mainElems is not enough; the slot is a separate pointer. */
+static void validateItemsList(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_element_t **list, theme_elems_t *mainElems)
 {
-    if (list) {
-        items_list_t *itemsList = (items_list_t *)list->extended;
+    if (*list) {
+        items_list_t *itemsList = (items_list_t *)(*list)->extended;
         if (itemsList->decorator) {
             // Second pass to find the decorator
             theme_element_t *decoratorElem = mainElems->first;
@@ -989,10 +1018,14 @@ static void validateItemsList(const char *themePath, config_set_t *themeConfig, 
         }
     } else {
         LOG("THEMES No itemsList found, adding a default one\n");
-        list = initBasic(themePath, themeConfig, theme, "il", ELEM_TYPE_ITEMS_LIST, 42, 42, ALIGN_NONE, 373, 316, SCALING_RATIO, theme->textColor, theme->fonts[0]);
-        initItemsList(themePath, themeConfig, theme, list, "il", NULL);
-        list->next = mainElems->first->next; // Position the itemsList as second element (right after the Background)
-        mainElems->first->next = list;
+        theme_element_t *elem = initBasic(themePath, themeConfig, theme, "il", ELEM_TYPE_ITEMS_LIST, 42, 42, ALIGN_NONE, 373, 316, SCALING_RATIO, theme->textColor, theme->fonts[0]);
+        initItemsList(themePath, themeConfig, theme, elem, "il", NULL);
+        elem->next = mainElems->first->next; // Position the itemsList as second element (right after the Background)
+        mainElems->first->next = elem;
+
+        // The slot menusys.c dereferences. Without this the theme renders, and
+        // then freezes the moment the user moves the selection.
+        *list = elem;
     }
 }
 
@@ -1003,8 +1036,451 @@ static void validateGUIElems(const char *themePath, config_set_t *themeConfig, t
     validateBackgroundElems(themePath, themeConfig, theme, &theme->appsMainElems, &theme->appsInfoElems);
 
     // 2. check we have a valid ItemsList element, and link its decorator to the target element
-    validateItemsList(themePath, themeConfig, theme, theme->gamesItemsList, &theme->mainElems);
-    validateItemsList(themePath, themeConfig, theme, theme->appsItemsList, &theme->appsMainElems);
+    validateItemsList(themePath, themeConfig, theme, &theme->gamesItemsList, &theme->mainElems);
+    validateItemsList(themePath, themeConfig, theme, &theme->appsItemsList, &theme->appsMainElems);
+}
+
+// FrostedPanel /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/* The blur is a whole-frame operation, but a theme may place several glass
+   panels. Blur once, on whichever panel draws first this frame, and let the
+   rest sample the same chain. */
+static int frostedBlurFrame = -1;
+
+static void frostedEnsureBackdrop(void)
+{
+    if (frostedBlurFrame != guiFrameId) {
+        frostedBlurFrame = guiFrameId;
+        rmBlurBackdrop();
+    }
+}
+
+static void drawFrostedPanel(struct menu_list *menu, struct submenu_list *item, config_set_t *config, struct theme_element *elem)
+{
+    int x = elem->posX;
+    int y = elem->posY;
+
+    if (elem->aligned & ALIGN_HCENTER)
+        x -= elem->width >> 1;
+    else if (elem->aligned & ALIGN_RIGHT)
+        x -= elem->width;
+
+    if (elem->aligned & ALIGN_VCENTER)
+        y -= elem->height >> 1;
+    else if (elem->aligned & ALIGN_BOTTOM)
+        y -= elem->height;
+
+    frostedEnsureBackdrop();
+
+    // Safe even with no blur: rmDrawFrosted degrades to just the tint.
+    rmDrawFrosted(x, y, elem->width, elem->height, elem->color);
+}
+
+/* The tint needs its own alpha, and initBasic cannot give it one: that helper
+   hardcodes 0x80 into every `_color` it parses, and on the GS 0x80 is FULLY
+   OPAQUE. For every other element that is right -- a colour is just a colour.
+   For glass it is fatal: an opaque tint paints straight over the blurred
+   backdrop the panel exists to show, and the whole thing collapses into a flat
+   box. Hence a separate `_alpha`. */
+static void initFrostedPanel(config_set_t *themeConfig, theme_element_t *elem, const char *name)
+{
+    char elemProp[64];
+    unsigned char color[3] = {0x18, 0x18, 0x28};
+    int alpha = 0x30; // a third of the way to opaque: reads as glass, not as paint
+
+    snprintf(elemProp, sizeof(elemProp), "%s_color", name);
+    configGetColor(themeConfig, elemProp, color);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_alpha", name);
+    configGetInt(themeConfig, elemProp, &alpha);
+
+    // 0x80 is the GS neutral, i.e. fully opaque. Above it the result is undefined.
+    if (alpha < 0)
+        alpha = 0;
+    if (alpha > 0x80)
+        alpha = 0x80;
+
+    elem->color = GS_SETREG_RGBA(color[0], color[1], color[2], alpha);
+    elem->drawElem = &drawFrostedPanel;
+}
+
+// ItemTitle ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/* ItemText renders itemGetStartup() -- the disc serial, SLUS_203.28. That is
+   deliberate upstream behaviour and several themes rely on it, so it stays put.
+   This is the other half: the human name of the game, the same string the
+   card shelf falls back to when a cover is missing. */
+static void drawItemTitle(struct menu_list *menu, struct submenu_list *item, config_set_t *config, struct theme_element *elem)
+{
+    if (item)
+        fntRenderString(elem->font, elem->posX, elem->posY, elem->aligned, 0, 0, submenuItemGetText(&item->item), elem->color);
+}
+
+// CardShelf ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define SHELF_MAX_CARDS 16
+
+typedef struct
+{
+    image_cache_t *cache;
+
+    int cardWidth;
+    int cardHeight;
+    int spacing;
+    int lift;         // how far the focused card rises, in pixels
+    float focusScale; // how much bigger the focused card gets
+
+    float focus; // animated position of the focus, in card slots
+    int focusInit;
+} card_shelf_t;
+
+static void drawCardShelf(struct menu_list *menu, struct submenu_list *item, config_set_t *config, struct theme_element *elem)
+{
+    if (!item)
+        return;
+
+    card_shelf_t *shelf = (card_shelf_t *)elem->extended;
+    const int stride = shelf->cardWidth + shelf->spacing;
+
+    if (stride <= 0)
+        return;
+
+    int visible = (elem->width / stride) + 1;
+
+    if (visible > SHELF_MAX_CARDS)
+        visible = SHELF_MAX_CARDS;
+    if (visible <= 0)
+        return;
+
+    /* Culling: walk only the page OPL already computed, never the whole list.
+       A library can hold hundreds of titles; the shelf shows a handful. */
+    submenu_list_t *walk = menu->item->pagestart;
+    int selected = -1;
+
+    for (int n = 0; walk && n < visible; n++, walk = walk->next) {
+        if (walk == item)
+            selected = n;
+    }
+
+    if (selected < 0)
+        selected = 0;
+
+    /* Chase the selection rather than snapping to it. uiApproach is time-based,
+       so the slide lasts the same wall-clock time at PAL's 50 Hz as at 60 Hz. */
+    if (!shelf->focusInit) {
+        shelf->focus = (float)selected;
+        shelf->focusInit = 1;
+    } else {
+        shelf->focus = uiApproach(shelf->focus, (float)selected, 12.0f, uiAnimDelta());
+    }
+
+    int baseX = elem->posX;
+    int baseY = elem->posY;
+
+    if (elem->aligned & ALIGN_HCENTER)
+        baseX -= elem->width >> 1;
+    if (elem->aligned & ALIGN_VCENTER)
+        baseY -= elem->height >> 1;
+
+    /* The row slides so the focused card sits in the middle of the shelf,
+       rather than the page always starting flush against the left edge. With
+       only a few games that is what closes the big empty gap on the right, and
+       it is how a console shelf behaves anyway: the focus holds still and the
+       row moves underneath it. Driven by the ANIMATED focus, so the row glides
+       instead of jumping. */
+    const float rowCentre = (float)baseX + (float)elem->width * 0.5f;
+
+    walk = menu->item->pagestart;
+
+    for (int i = 0; i < visible && walk; i++, walk = walk->next) {
+        /* Proximity to the ANIMATED focus, not to the selected index: 1 on the
+           focused card, 0 once a full slot away. Driving the growth and the
+           lift from this is what makes them ease instead of snapping when the
+           selection changes. */
+        float d = shelf->focus - (float)i;
+
+        if (d < 0.0f)
+            d = -d;
+
+        float prox = 1.0f - d;
+
+        if (prox < 0.0f)
+            prox = 0.0f;
+
+        const float scale = 1.0f + (shelf->focusScale - 1.0f) * prox;
+
+        const int w = (int)((float)shelf->cardWidth * scale);
+        const int h = (int)((float)shelf->cardHeight * scale);
+
+        // Grow about the centre, and rise.
+        const int cx = (int)(rowCentre + ((float)i - shelf->focus) * (float)stride);
+        const int cy = baseY + (shelf->cardHeight >> 1) - (int)((float)shelf->lift * prox);
+
+        GSTEXTURE *cover = getGameImageTexture(shelf->cache, menu->item->userdata, &walk->item);
+
+        if (cover && cover->Mem) {
+            /* Dim the unfocused cards. The focused one then reads as focused on
+               brightness alone, with no border to draw. 0x80 is the neutral of
+               the GS modulate, so the focused card is left untouched. */
+            const u32 shade = 0x60 + (u32)(0x20 * prox);
+            const u64 tint = GS_SETREG_RGBA(shade, shade, shade, 0x80);
+
+            rmDrawPixmap(cover, cx, cy, ALIGN_CENTER, w, h, elem->scaled, tint);
+        } else {
+            /* No art yet: hold the slot with a plate and the title, so the row
+               keeps its shape while covers stream in on the IO thread. */
+            rmDrawRect(cx - (w >> 1), cy - (h >> 1), w, h, gColDarker);
+            fntRenderString(elem->font, cx, cy, ALIGN_CENTER, w, h, submenuItemGetText(&walk->item), elem->color);
+        }
+    }
+}
+
+static void endCardShelf(struct theme_element *elem)
+{
+    card_shelf_t *shelf = (card_shelf_t *)elem->extended;
+
+    if (shelf) {
+        if (shelf->cache)
+            cacheDestroyCache(shelf->cache);
+
+        free(shelf);
+        elem->extended = NULL;
+    }
+}
+
+static void initCardShelf(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_element_t *elem, const char *name)
+{
+    card_shelf_t *shelf = (card_shelf_t *)malloc(sizeof(card_shelf_t));
+    char elemProp[64];
+
+    // Defaults match the tile the rescaler produces.
+    shelf->cardWidth = 128;
+    shelf->cardHeight = 192;
+    shelf->spacing = 24;
+    shelf->lift = 16;
+    shelf->focus = 0.0f;
+    shelf->focusInit = 0;
+
+    snprintf(elemProp, sizeof(elemProp), "%s_card_width", name);
+    configGetInt(themeConfig, elemProp, &shelf->cardWidth);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_card_height", name);
+    configGetInt(themeConfig, elemProp, &shelf->cardHeight);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_spacing", name);
+    configGetInt(themeConfig, elemProp, &shelf->spacing);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_lift", name);
+    configGetInt(themeConfig, elemProp, &shelf->lift);
+
+    // As a percentage, because the theme config only reads ints.
+    int focusScalePct = 115;
+    snprintf(elemProp, sizeof(elemProp), "%s_focus_scale", name);
+    configGetInt(themeConfig, elemProp, &focusScalePct);
+    shelf->focusScale = (float)focusScalePct / 100.0f;
+
+    int cacheCount = 10;
+    snprintf(elemProp, sizeof(elemProp), "%s_count", name);
+    configGetInt(themeConfig, elemProp, &cacheCount);
+
+    /* Its own cache, deliberately NOT the shared one from initMutableImage.
+       That helper deduplicates caches by art pattern, and an ItemCover in the
+       same theme also uses "COV" -- sharing would push one of the two through
+       the wrong loader, and either the shelf would get native-size covers (the
+       very thing that does not fit) or ItemCover would get 128x192 tiles. */
+    shelf->cache = cacheInitCache(theme->gameCacheCount++, "ART", 1, "COV", cacheCount);
+
+    if (shelf->cache)
+        shelf->cache->psm = GS_PSM_CT16; // ask the loader for the rescaled tile
+
+    /* Tell menusys the items run along X, so left/right walks the games and
+       up/down changes device page. Without this the shelf would scroll on a
+       pair of keys that point the wrong way. */
+    theme->horizontalItems = 1;
+
+    elem->extended = shelf;
+    elem->drawElem = &drawCardShelf;
+    elem->endElem = &endCardShelf;
+}
+
+// CoverWallpaper ///////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+typedef struct
+{
+    image_cache_t *cache;
+
+    /* Crossfade state. These are GSTEXTURE pointers into the cache, NOT menu
+       items: a cache's GSTEXTURE structs live as long as the cache, whereas a
+       submenu item can be freed out from under us when the device list is
+       rebuilt. Worst case the outgoing entry gets recycled mid-fade and we
+       blend from the wrong art for a few hundred ms. It can never dangle. */
+    GSTEXTURE *current;
+    GSTEXTURE *prev;
+    float fade;
+    float fadeTime;
+
+    int blur; //!< run the whole backdrop through the blur chain
+
+    u64 veilTop;
+    u64 veilBottom;
+} cover_wallpaper_t;
+
+static void drawCoverWallpaper(struct menu_list *menu, struct submenu_list *item, config_set_t *config, struct theme_element *elem)
+{
+    cover_wallpaper_t *wp = (cover_wallpaper_t *)elem->extended;
+    GSTEXTURE *cover = NULL;
+
+    if (item) {
+        cover = getGameImageTexture(wp->cache, menu->item->userdata, &item->item);
+
+        if (cover && !cover->Mem)
+            cover = NULL; // still streaming in on the IO thread
+    }
+
+    // Focus moved, or the art just finished loading: start a crossfade.
+    if (cover != wp->current) {
+        wp->prev = wp->current;
+        wp->current = cover;
+        wp->fade = 0.0f;
+    }
+
+    wp->fade = uiAdvance(wp->fade, wp->fadeTime, uiAnimDelta());
+
+    if (wp->fade >= 1.0f) {
+        /* Steady state, which is nearly every frame. No crossfade is in flight,
+           so the outgoing layer would be painted over in full: drawing it is a
+           whole screen of fill thrown away. Fill is the GS budget that actually
+           matters here, so skip it. */
+        if (wp->current)
+            rmDrawPixmap(wp->current, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol);
+        else
+            rmDrawRect(0, 0, screenWidth, screenHeight, gColBlack);
+    } else {
+        const float t = uiEaseInOutCubic(wp->fade);
+
+        // Outgoing art. The tile is only 128x192, but it is about to be blurred
+        // into mush, so stretching it is free and costs no extra VRAM.
+        if (wp->prev && wp->prev->Mem)
+            rmDrawPixmap(wp->prev, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol);
+        else
+            rmDrawRect(0, 0, screenWidth, screenHeight, gColBlack);
+
+        // Incoming art, faded in over it.
+        if (wp->current) {
+            const u32 a = (u32)(0x80 * t);
+
+            rmDrawPixmapBlend(wp->current, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE,
+                              GS_SETREG_RGBA(0x80, 0x80, 0x80, a));
+        }
+    }
+
+    /* Optionally blur the lot. The chain samples the FRAMEBUFFER, which at this
+       point holds the wallpaper -- so a frosted panel over the whole screen IS
+       the blurred wallpaper.
+
+       Off by default, and that is the point: blurring only ever made sense
+       while the source was a 128x192 cover tile stretched 5x, where the blur
+       hid the stretching. Feed it real full-screen art (_BG) and the blur
+       throws away the very detail that art was drawn for. Sharp backdrop,
+       glass only in the FrostedPanel band -- which is the console look anyway. */
+    if (wp->blur) {
+        frostedEnsureBackdrop();
+        rmDrawFrosted(0, 0, screenWidth, screenHeight, elem->color);
+    }
+
+    /* The veil. A cover can easily be a bright image and the UI text is white,
+       so the contrast has to be bought rather than hoped for. It is a gradient
+       because the text sits at the bottom: dark where the text is, light where
+       the art should still breathe. */
+    rmDrawRectGradient(0, 0, screenWidth, screenHeight, wp->veilTop, wp->veilBottom);
+}
+
+static void endCoverWallpaper(struct theme_element *elem)
+{
+    cover_wallpaper_t *wp = (cover_wallpaper_t *)elem->extended;
+
+    if (wp) {
+        if (wp->cache)
+            cacheDestroyCache(wp->cache);
+
+        free(wp);
+        elem->extended = NULL;
+    }
+}
+
+static void initCoverWallpaper(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_element_t *elem, const char *name)
+{
+    cover_wallpaper_t *wp = (cover_wallpaper_t *)malloc(sizeof(cover_wallpaper_t));
+    char elemProp[64];
+    unsigned char color[3];
+
+    wp->current = NULL;
+    wp->prev = NULL;
+    wp->fade = 1.0f;
+
+    int fadeMs = 350;
+    snprintf(elemProp, sizeof(elemProp), "%s_fade_ms", name);
+    configGetInt(themeConfig, elemProp, &fadeMs);
+    wp->fadeTime = (float)fadeMs / 1000.0f;
+
+    // The veil is darker at the bottom, where the title text lives.
+    int veilTopAlpha = 0x30;
+    int veilBottomAlpha = 0x70;
+
+    unsigned char veilTopRGB[3] = {0x00, 0x00, 0x00};
+    unsigned char veilBottomRGB[3] = {0x00, 0x00, 0x00};
+
+    snprintf(elemProp, sizeof(elemProp), "%s_veil_top", name);
+    if (configGetColor(themeConfig, elemProp, color))
+        memcpy(veilTopRGB, color, sizeof(veilTopRGB));
+
+    snprintf(elemProp, sizeof(elemProp), "%s_veil_bottom", name);
+    if (configGetColor(themeConfig, elemProp, color))
+        memcpy(veilBottomRGB, color, sizeof(veilBottomRGB));
+
+    snprintf(elemProp, sizeof(elemProp), "%s_veil_top_alpha", name);
+    configGetInt(themeConfig, elemProp, &veilTopAlpha);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_veil_bottom_alpha", name);
+    configGetInt(themeConfig, elemProp, &veilBottomAlpha);
+
+    wp->veilTop = GS_SETREG_RGBA(veilTopRGB[0], veilTopRGB[1], veilTopRGB[2], veilTopAlpha);
+    wp->veilBottom = GS_SETREG_RGBA(veilBottomRGB[0], veilBottomRGB[1], veilBottomRGB[2], veilBottomAlpha);
+
+    /* Which art drives the backdrop. "BG" is per-game full-screen art, drawn
+       for exactly this job, and it is the default. "COV" reuses the cover, and
+       only makes sense together with _blur=1 -- see below. */
+    const char *pattern = "BG";
+    snprintf(elemProp, sizeof(elemProp), "%s_pattern", name);
+    configGetStr(themeConfig, elemProp, &pattern);
+
+    /* Blur defaults OFF for full-screen art and ON for a cover, because a
+       cover has to be stretched ~5x to fill the screen and the blur is what
+       hides that. Either way the theme can override it. */
+    wp->blur = strcmp(pattern, "COV") ? 0 : 1;
+    snprintf(elemProp, sizeof(elemProp), "%s_blur", name);
+    configGetInt(themeConfig, elemProp, &wp->blur);
+
+    /* Default the cache small on purpose. These are NATIVE-SIZE textures now,
+       not 48 KiB tiles: a 640x480 backdrop is around 900 KiB, and the pool left
+       after the framebuffers is 1,632 KiB. Two resident at once (which is what
+       a crossfade asks for) already overcommits it, so a deep cache would just
+       thrash the TexManager. */
+    int cacheCount = 3;
+    snprintf(elemProp, sizeof(elemProp), "%s_count", name);
+    configGetInt(themeConfig, elemProp, &cacheCount);
+
+    wp->cache = cacheInitCache(theme->gameCacheCount++, "ART", 1, pattern, cacheCount);
+
+    /* CT16 asks texDiscoverLoadPsm() for the fixed 128x192 tile; the default
+       CT24 means "load at native size". Only the cover path wants the tile --
+       full-screen art is the whole reason to stay native. */
+    if (wp->cache && !strcmp(pattern, "COV"))
+        wp->cache->psm = GS_PSM_CT16;
+
+    elem->extended = wp;
+    elem->drawElem = &drawCoverWallpaper;
+    elem->endElem = &endCoverWallpaper;
 }
 
 static int addGUIElem(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_elems_t *elems, const char *type, const char *name)
@@ -1080,6 +1556,20 @@ static int addGUIElem(const char *themePath, config_set_t *themeConfig, theme_t 
             } else if (!strcmp(elementsType[ELEM_TYPE_BDM_INDEX], type)) {
                 elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_BDM_INDEX, screenWidth >> 1, 355, ALIGN_CENTER, DIM_UNDEF, DIM_UNDEF, SCALING_RATIO, gDefaultCol, theme->fonts[0]);
                 elem->drawElem = &drawBDMIndex;
+            } else if (!strcmp(elementsType[ELEM_TYPE_FROSTED_PANEL], type)) {
+                elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_FROSTED_PANEL, 0, 0, ALIGN_NONE, 300, 200, SCALING_NONE, gColDarker, theme->fonts[0]);
+                initFrostedPanel(themeConfig, elem, name);
+            } else if (!strcmp(elementsType[ELEM_TYPE_ITEM_TITLE], type)) {
+                elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_ITEM_TITLE, 0, 0, ALIGN_CENTER, DIM_UNDEF, DIM_UNDEF, SCALING_RATIO, theme->textColor, theme->fonts[0]);
+                elem->drawElem = &drawItemTitle;
+            } else if (!strcmp(elementsType[ELEM_TYPE_CARD_SHELF], type)) {
+                elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_CARD_SHELF, 40, 180, ALIGN_NONE, 560, 240, SCALING_NONE, theme->textColor, theme->fonts[0]);
+                initCardShelf(themePath, themeConfig, theme, elem, name);
+            } else if (!strcmp(elementsType[ELEM_TYPE_COVER_WALLPAPER], type)) {
+                if (!elems->first) { // like Background: it IS the backdrop, so it must come first
+                    elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_COVER_WALLPAPER, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gColDarker, theme->fonts[0]);
+                    initCoverWallpaper(themePath, themeConfig, theme, elem, name);
+                }
             }
 
             if (elem) {
@@ -1197,6 +1687,7 @@ static void thmSetColors(theme_t *theme)
     theme->textColor = GS_SETREG_RGBA(gDefaultTextColor[0], gDefaultTextColor[1], gDefaultTextColor[2], 0x80);
     theme->uiTextColor = GS_SETREG_RGBA(gDefaultUITextColor[0], gDefaultUITextColor[1], gDefaultUITextColor[2], 0x80);
     theme->selTextColor = GS_SETREG_RGBA(gDefaultSelTextColor[0], gDefaultSelTextColor[1], gDefaultSelTextColor[2], 0x80);
+    theme->hasHoverColor = 0;
 
     theme_element_t *elem = theme->mainElems.first;
     while (elem) {
@@ -1300,6 +1791,14 @@ static void thmLoad(const char *themePath)
 
     if (configGetColor(themeConfig, "sel_text_color", color))
         newT->selTextColor = GS_SETREG_RGBA(color[0], color[1], color[2], 0x80);
+
+    /* Optional. Without it dia.c behaves exactly as before, which is what keeps
+       every existing theme rendering identically. */
+    if (configGetColor(themeConfig, "hover_color", color)) {
+        newT->hoverColor = GS_SETREG_RGBA(color[0], color[1], color[2], 0x80);
+        newT->hasHoverColor = 1;
+        LOG("THEMES hover_color = %02x %02x %02x\n", color[0], color[1], color[2]);
+    }
 
     // before loading the element definitions, we have to have the fonts prepared
     // for that, we load the fonts and a translation table

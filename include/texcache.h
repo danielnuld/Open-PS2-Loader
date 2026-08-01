@@ -37,6 +37,13 @@ typedef struct
 
     /// the cache entries itself
     cache_entry_t *content;
+
+    /// Pixel format asked of the loader. GS_PSM_CT24 (the default) means "load
+    /// the image at its native size", which is what every existing element
+    /// wants. GS_PSM_CT16 asks for the rescaled 128x192 cover tile instead --
+    /// only the card shelf sets it, because only it draws several covers at
+    /// once and a native-sized one can be 1,440 KiB.
+    short psm;
 } image_cache_t;
 
 /** Initializes the cache subsystem.

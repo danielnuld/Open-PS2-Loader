@@ -105,7 +105,31 @@ enum INTERNAL_TEXTURE {
 
 int texLookupInternalTexId(const char *name);
 int texLoadInternal(GSTEXTURE *texture, int texId);
+
+/** Loads cover art box-filtered down to a fixed 128x192 CT16 tile (48 KiB).
+ *
+ * Unlike texDiscoverLoad(), the native-resolution image is never allocated as a
+ * texture, so it can never reach VRAM -- not even transiently. This is what
+ * makes a shelf of covers fit: at native size a single one can be 1,440 KiB,
+ * against a TexManager pool of ~1,856 KiB. */
+int texLoadCover(GSTEXTURE *texture, const char *filePath);
+
+/** Same, from a PNG embedded in the ELF. Used to time the filter (task 0.6)
+ *  against a known worst case without needing art on the memory card. */
+int texLoadCoverInternal(GSTEXTURE *texture, int texId);
+
+#ifdef __DEBUG
+/** Cost of the last cover rescale, in ms; -1 until one has run. The debug
+ *  overlay draws these -- LOG() would need a console that may not be open. */
+extern int gCoverDecodeMs;
+extern int gCoverFilterMs;
+#endif
 int texDiscoverLoad(GSTEXTURE *texture, const char *path, int texId);
+
+/** As texDiscoverLoad(), but GS_PSM_CT16 selects the rescaled cover tile
+ *  (texLoadCover) rather than the native-resolution image. Anything else takes
+ *  the original path unchanged. */
+int texDiscoverLoadPsm(GSTEXTURE *texture, const char *path, int texId, short psm);
 void texFree(GSTEXTURE *texture);
 
 #endif

@@ -99,6 +99,28 @@ void rmDrawOverlayPixmap(GSTEXTURE *overlay, int x, int y, short aligned, int w,
 /** Queues a opaque rectangle to be rendered */
 void rmDrawRect(int x, int y, int w, int h, u64 color);
 
+/** Blurs the framebuffer as drawn so far into an off-screen chain.
+ *
+ * Call once per frame, after the backdrop is down and before any frosted
+ * panel. Cheap no-op when the blur is unavailable (hi-res mode, or no VRAM). */
+void rmBlurBackdrop(void);
+
+/** Like rmDrawPixmap, but forces alpha blending on, so the alpha of `color`
+ * fades the texture. rmDrawPixmap only enables blending for CT32, which makes
+ * the CT16 cover tiles impossible to crossfade. */
+void rmDrawPixmapBlend(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, short scaled, u64 color);
+
+/** Vertical gradient rectangle. One gouraud quad, so it costs the same as a
+ * flat one -- the GS interpolates the colour across the vertices for free. */
+void rmDrawRectGradient(int x, int y, int w, int h, u64 colorTop, u64 colorBottom);
+
+/** Draws a frosted-glass panel: the blurred backdrop showing through, with a
+ * translucent tint composited on top.
+ *
+ * Degrades to just the tint when the blur is unavailable, so it is always safe
+ * to call. Needs rmBlurBackdrop() to have run this frame to show anything. */
+void rmDrawFrosted(int x, int y, int w, int h, u64 tint);
+
 /** Queues a single color line to be rendered */
 void rmDrawLine(int x1, int y1, int x2, int y2, u64 color);
 

@@ -9,6 +9,7 @@
 
 #include "include/opl.h"
 #include "include/renderman.h"
+#include "include/rmblur.h"
 #include "include/ioman.h"
 
 // Allocateable space in vram, as indicated in GsKit's code
@@ -238,6 +239,10 @@ int rmSetMode(int force)
             gsKit_sync_flip(gsGlobal);
         }
 
+        // Claims its VRAM out of what is left after the framebuffers, so it
+        // has to come after gsKit_init_screen() has moved CurrentPointer.
+        rmBlurInit(hires);
+
         LOG("RENDERMAN New vmode: %d, %d x %d\n", vmode, gsGlobal->Width, gsGlobal->Height);
     }
 
@@ -263,6 +268,8 @@ void rmGetScreenExtents(int *w, int *h)
 
 void rmEnd(void)
 {
+    rmBlurEnd();
+
     if (hires) {
         gsKit_hires_deinit_global(gsGlobal);
     } else {
@@ -390,6 +397,101 @@ void rmDrawRect(int x, int y, int w, int h, u64 color)
     gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
     gsKit_prim_sprite(gsGlobal, fx, fy, fx + fw, fy + fh, order, color);
     order++;
+}
+
+/* Like rmDrawPixmap, but blends.
+ *
+ * rmDrawQuad decides on alpha from the pixel format, and only turns it on for
+ * CT32. That is right for every existing element, but it makes a CT16 texture
+ * impossible to fade -- and the cover tiles are CT16. Here alpha is forced on,
+ * so the alpha of `color` drives a crossfade: with the GS modulate, a texel of
+ * alpha 0x80 times a colour of alpha N comes out at N. */
+void rmDrawPixmapBlend(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, short scaled, u64 color)
+{
+    rm_quad_t quad;
+    rmSetupQuad(txt, x, y, aligned, w, h, scaled, color, &quad);
+
+    const u8 savedATE = gsGlobal->Test->ATE;
+
+    gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+    gsKit_set_test(gsGlobal, GS_ATEST_OFF);
+
+    gsKit_TexManager_bind(gsGlobal, quad.txt);
+    gsKit_prim_sprite_texture(gsGlobal, quad.txt,
+                              quad.ul.x + fRenderXOff, quad.ul.y + fRenderYOff,
+                              quad.ul.u, quad.ul.v,
+                              quad.br.x + fRenderXOff, quad.br.y + fRenderYOff,
+                              quad.br.u, quad.br.v, order, quad.color);
+    order++;
+
+    gsKit_set_test(gsGlobal, savedATE ? GS_ATEST_ON : GS_ATEST_OFF);
+}
+
+/* Vertical gradient. One gouraud quad: the GS interpolates the colour across
+   the vertices for free, so a veil that fades out costs exactly as much as a
+   flat rectangle. Drawn as a strip -- UL, UR, LL, LR. */
+void rmDrawRectGradient(int x, int y, int w, int h, u64 colorTop, u64 colorBottom)
+{
+    float fx = X_SCALE(x) + fRenderXOff;
+    float fy = Y_SCALE(y) + fRenderYOff;
+    float fw = X_SCALE(w);
+    float fh = Y_SCALE(h);
+
+    gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+    gsKit_prim_quad_gouraud(gsGlobal,
+                            fx, fy,
+                            fx + fw, fy,
+                            fx, fy + fh,
+                            fx + fw, fy + fh,
+                            order, colorTop, colorTop, colorBottom, colorBottom);
+    order++;
+}
+
+void rmDrawFrosted(int x, int y, int w, int h, u64 tint)
+{
+    float fx = X_SCALE(x) + fRenderXOff;
+    float fy = Y_SCALE(y) + fRenderYOff;
+    float fw = X_SCALE(w);
+    float fh = Y_SCALE(h);
+
+    GSTEXTURE *blur = rmBlurTexture();
+    const u8 savedATE = gsGlobal->Test->ATE;
+
+    if (blur) {
+        // The chain holds the whole framebuffer, reduced. So a framebuffer
+        // pixel maps onto it by a constant ratio -- different per axis, since
+        // the second level is 128 wide but H/4 tall.
+        float su = (float)blur->Width / (float)gsGlobal->Width;
+        float sv = (float)blur->Height / (float)gsGlobal->Height;
+
+        // The backdrop goes down with blending OFF. Compositing it would pull
+        // the framebuffer's alpha into the equation, and in CT16S that channel
+        // is a single bit we do not control. The tint below is what composites.
+        gsGlobal->PrimAlphaEnable = GS_SETTING_OFF;
+        gsKit_set_test(gsGlobal, GS_ATEST_OFF);
+        gsKit_set_clamp(gsGlobal, GS_CMODE_CLAMP);
+
+        // Straight to the GS: this texture lives in VRAM with no EE-side copy,
+        // so the TexManager must never see it.
+        gsKit_prim_sprite_texture(gsGlobal, blur,
+                                  fx, fy,
+                                  fx * su, fy * sv,
+                                  fx + fw, fy + fh,
+                                  (fx + fw) * su, (fy + fh) * sv,
+                                  order, gDefaultCol);
+        order++;
+
+        gsKit_set_clamp(gsGlobal, GS_CMODE_REPEAT);
+    }
+
+    // With no blur this is the entire panel: a plain translucent rectangle.
+    // That is the documented degradation, not a failure.
+    gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+    gsKit_prim_sprite(gsGlobal, fx, fy, fx + fw, fy + fh, order, tint);
+    order++;
+
+    // The alpha test is global state; restore whatever the caller had.
+    gsKit_set_test(gsGlobal, savedATE ? GS_ATEST_ON : GS_ATEST_OFF);
 }
 
 void rmDrawLine(int x1, int y1, int x2, int y2, u64 color)
