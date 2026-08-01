@@ -1351,7 +1351,12 @@ int guiAlignMenuHints(menu_hint_item_t *hint, int font, int width)
 
     for (; hint; hint = hint->next) {
         GSTEXTURE *iconTex = thmGetTexture(hint->icon_id);
-        w = (iconTex->Width * 20) / iconTex->Height;
+        // thmGetTexture returns NULL for any texture that never loaded, which is
+        // the normal state of a theme with use_default=0 that ships no images.
+        // Every other call site in OPL checks; these two did not, and the width
+        // is also a division by iconTex->Height. guiDrawIconAndText below skips
+        // the icon in the same case, so zero is the width that matches.
+        w = iconTex ? (iconTex->Width * 20) / iconTex->Height : 0;
         char *text = _l(hint->text_id);
 
         x -= rmWideScale(w) + 2;
@@ -1373,7 +1378,7 @@ int guiAlignSubMenuHints(int hintCount, int *textID, int *iconID, int font, int 
 
     for (i = 0; i < hintCount; i++) {
         GSTEXTURE *iconTex = thmGetTexture(iconID[i]);
-        w = (iconTex->Width * 20) / iconTex->Height;
+        w = iconTex ? (iconTex->Width * 20) / iconTex->Height : 0; // see guiAlignMenuHints
         char *text = _l(textID[i]);
 
         x -= rmWideScale(w) + 2;
