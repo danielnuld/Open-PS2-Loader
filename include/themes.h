@@ -122,6 +122,13 @@ typedef struct theme
     theme_element_t *loadingIcon;
     int loadingIconCount;
 
+    /// Set by a CardShelf, which lays the items out along X instead of Y. The
+    /// D-pad axes are swapped in that case: left/right walks the games and
+    /// up/down changes device page, which is the other way round from the
+    /// classic vertical list. Themes without a shelf leave this at 0 and keep
+    /// the original mapping.
+    int horizontalItems;
+
     GSTEXTURE textures[TEXTURES_COUNT];
     int fonts[THM_MAX_FONTS]; //!< Storage of font handles for removal once not needed
 } theme_t;

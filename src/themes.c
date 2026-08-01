@@ -56,6 +56,7 @@ enum ELEM_ATTRIBUTE_TYPE {
     ELEM_TYPE_FROSTED_PANEL,
     ELEM_TYPE_CARD_SHELF,
     ELEM_TYPE_COVER_WALLPAPER,
+    ELEM_TYPE_ITEM_TITLE,
     ELEM_TYPE_COUNT
 };
 
@@ -87,7 +88,8 @@ static const char *elementsType[ELEM_TYPE_COUNT] = {
     "GameCountText",
     "FrostedPanel",
     "CardShelf",
-    "CoverWallpaper"};
+    "CoverWallpaper",
+    "ItemTitle"};
 
 // Common functions for Text ////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1074,6 +1076,46 @@ static void drawFrostedPanel(struct menu_list *menu, struct submenu_list *item, 
     rmDrawFrosted(x, y, elem->width, elem->height, elem->color);
 }
 
+/* The tint needs its own alpha, and initBasic cannot give it one: that helper
+   hardcodes 0x80 into every `_color` it parses, and on the GS 0x80 is FULLY
+   OPAQUE. For every other element that is right -- a colour is just a colour.
+   For glass it is fatal: an opaque tint paints straight over the blurred
+   backdrop the panel exists to show, and the whole thing collapses into a flat
+   box. Hence a separate `_alpha`. */
+static void initFrostedPanel(config_set_t *themeConfig, theme_element_t *elem, const char *name)
+{
+    char elemProp[64];
+    unsigned char color[3] = {0x18, 0x18, 0x28};
+    int alpha = 0x30; // a third of the way to opaque: reads as glass, not as paint
+
+    snprintf(elemProp, sizeof(elemProp), "%s_color", name);
+    configGetColor(themeConfig, elemProp, color);
+
+    snprintf(elemProp, sizeof(elemProp), "%s_alpha", name);
+    configGetInt(themeConfig, elemProp, &alpha);
+
+    // 0x80 is the GS neutral, i.e. fully opaque. Above it the result is undefined.
+    if (alpha < 0)
+        alpha = 0;
+    if (alpha > 0x80)
+        alpha = 0x80;
+
+    elem->color = GS_SETREG_RGBA(color[0], color[1], color[2], alpha);
+    elem->drawElem = &drawFrostedPanel;
+}
+
+// ItemTitle ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/* ItemText renders itemGetStartup() -- the disc serial, SLUS_203.28. That is
+   deliberate upstream behaviour and several themes rely on it, so it stays put.
+   This is the other half: the human name of the game, the same string the
+   card shelf falls back to when a cover is missing. */
+static void drawItemTitle(struct menu_list *menu, struct submenu_list *item, config_set_t *config, struct theme_element *elem)
+{
+    if (item)
+        fntRenderString(elem->font, elem->posX, elem->posY, elem->aligned, 0, 0, submenuItemGetText(&item->item), elem->color);
+}
+
 // CardShelf ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #define SHELF_MAX_CARDS 16
@@ -1140,6 +1182,14 @@ static void drawCardShelf(struct menu_list *menu, struct submenu_list *item, con
     if (elem->aligned & ALIGN_VCENTER)
         baseY -= elem->height >> 1;
 
+    /* The row slides so the focused card sits in the middle of the shelf,
+       rather than the page always starting flush against the left edge. With
+       only a few games that is what closes the big empty gap on the right, and
+       it is how a console shelf behaves anyway: the focus holds still and the
+       row moves underneath it. Driven by the ANIMATED focus, so the row glides
+       instead of jumping. */
+    const float rowCentre = (float)baseX + (float)elem->width * 0.5f;
+
     walk = menu->item->pagestart;
 
     for (int i = 0; i < visible && walk; i++, walk = walk->next) {
@@ -1163,7 +1213,7 @@ static void drawCardShelf(struct menu_list *menu, struct submenu_list *item, con
         const int h = (int)((float)shelf->cardHeight * scale);
 
         // Grow about the centre, and rise.
-        const int cx = baseX + (i * stride) + (shelf->cardWidth >> 1);
+        const int cx = (int)(rowCentre + ((float)i - shelf->focus) * (float)stride);
         const int cy = baseY + (shelf->cardHeight >> 1) - (int)((float)shelf->lift * prox);
 
         GSTEXTURE *cover = getGameImageTexture(shelf->cache, menu->item->userdata, &walk->item);
@@ -1243,6 +1293,11 @@ static void initCardShelf(const char *themePath, config_set_t *themeConfig, them
     if (shelf->cache)
         shelf->cache->psm = GS_PSM_CT16; // ask the loader for the rescaled tile
 
+    /* Tell menusys the items run along X, so left/right walks the games and
+       up/down changes device page. Without this the shelf would scroll on a
+       pair of keys that point the wrong way. */
+    theme->horizontalItems = 1;
+
     elem->extended = shelf;
     elem->drawElem = &drawCardShelf;
     elem->endElem = &endCardShelf;
@@ -1263,6 +1318,8 @@ typedef struct
     GSTEXTURE *prev;
     float fade;
     float fadeTime;
+
+    int blur; //!< run the whole backdrop through the blur chain
 
     u64 veilTop;
     u64 veilBottom;
@@ -1317,13 +1374,19 @@ static void drawCoverWallpaper(struct menu_list *menu, struct submenu_list *item
         }
     }
 
-    /* Now blur the lot. The chain samples the FRAMEBUFFER, which at this point
-       holds the stretched cover -- so a frosted panel over the whole screen IS
-       the blurred wallpaper. And with no blur available it degrades to just the
-       tint, leaving the cover sharp underneath, which is exactly the fallback
-       the spec asks for. */
-    frostedEnsureBackdrop();
-    rmDrawFrosted(0, 0, screenWidth, screenHeight, elem->color);
+    /* Optionally blur the lot. The chain samples the FRAMEBUFFER, which at this
+       point holds the wallpaper -- so a frosted panel over the whole screen IS
+       the blurred wallpaper.
+
+       Off by default, and that is the point: blurring only ever made sense
+       while the source was a 128x192 cover tile stretched 5x, where the blur
+       hid the stretching. Feed it real full-screen art (_BG) and the blur
+       throws away the very detail that art was drawn for. Sharp backdrop,
+       glass only in the FrostedPanel band -- which is the console look anyway. */
+    if (wp->blur) {
+        frostedEnsureBackdrop();
+        rmDrawFrosted(0, 0, screenWidth, screenHeight, elem->color);
+    }
 
     /* The veil. A cover can easily be a bright image and the UI text is white,
        so the contrast has to be bought rather than hoped for. It is a gradient
@@ -1384,17 +1447,35 @@ static void initCoverWallpaper(const char *themePath, config_set_t *themeConfig,
     wp->veilTop = GS_SETREG_RGBA(veilTopRGB[0], veilTopRGB[1], veilTopRGB[2], veilTopAlpha);
     wp->veilBottom = GS_SETREG_RGBA(veilBottomRGB[0], veilBottomRGB[1], veilBottomRGB[2], veilBottomAlpha);
 
-    int cacheCount = 10;
+    /* Which art drives the backdrop. "BG" is per-game full-screen art, drawn
+       for exactly this job, and it is the default. "COV" reuses the cover, and
+       only makes sense together with _blur=1 -- see below. */
+    const char *pattern = "BG";
+    snprintf(elemProp, sizeof(elemProp), "%s_pattern", name);
+    configGetStr(themeConfig, elemProp, &pattern);
+
+    /* Blur defaults OFF for full-screen art and ON for a cover, because a
+       cover has to be stretched ~5x to fill the screen and the blur is what
+       hides that. Either way the theme can override it. */
+    wp->blur = strcmp(pattern, "COV") ? 0 : 1;
+    snprintf(elemProp, sizeof(elemProp), "%s_blur", name);
+    configGetInt(themeConfig, elemProp, &wp->blur);
+
+    /* Default the cache small on purpose. These are NATIVE-SIZE textures now,
+       not 48 KiB tiles: a 640x480 backdrop is around 900 KiB, and the pool left
+       after the framebuffers is 1,632 KiB. Two resident at once (which is what
+       a crossfade asks for) already overcommits it, so a deep cache would just
+       thrash the TexManager. */
+    int cacheCount = 3;
     snprintf(elemProp, sizeof(elemProp), "%s_count", name);
     configGetInt(themeConfig, elemProp, &cacheCount);
 
-    // Its own cache, and CT16 like the shelf's: the wallpaper wants the small
-    // tile too. Drawing it full screen from a 128x192 tile is fine precisely
-    // because it ends up blurred -- and it keeps the native-size cover, which
-    // can be 1,440 KiB, out of VRAM.
-    wp->cache = cacheInitCache(theme->gameCacheCount++, "ART", 1, "COV", cacheCount);
+    wp->cache = cacheInitCache(theme->gameCacheCount++, "ART", 1, pattern, cacheCount);
 
-    if (wp->cache)
+    /* CT16 asks texDiscoverLoadPsm() for the fixed 128x192 tile; the default
+       CT24 means "load at native size". Only the cover path wants the tile --
+       full-screen art is the whole reason to stay native. */
+    if (wp->cache && !strcmp(pattern, "COV"))
         wp->cache->psm = GS_PSM_CT16;
 
     elem->extended = wp;
@@ -1477,7 +1558,10 @@ static int addGUIElem(const char *themePath, config_set_t *themeConfig, theme_t 
                 elem->drawElem = &drawBDMIndex;
             } else if (!strcmp(elementsType[ELEM_TYPE_FROSTED_PANEL], type)) {
                 elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_FROSTED_PANEL, 0, 0, ALIGN_NONE, 300, 200, SCALING_NONE, gColDarker, theme->fonts[0]);
-                elem->drawElem = &drawFrostedPanel;
+                initFrostedPanel(themeConfig, elem, name);
+            } else if (!strcmp(elementsType[ELEM_TYPE_ITEM_TITLE], type)) {
+                elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_ITEM_TITLE, 0, 0, ALIGN_CENTER, DIM_UNDEF, DIM_UNDEF, SCALING_RATIO, theme->textColor, theme->fonts[0]);
+                elem->drawElem = &drawItemTitle;
             } else if (!strcmp(elementsType[ELEM_TYPE_CARD_SHELF], type)) {
                 elem = initBasic(themePath, themeConfig, theme, name, ELEM_TYPE_CARD_SHELF, 40, 180, ALIGN_NONE, 560, 240, SCALING_NONE, theme->textColor, theme->fonts[0]);
                 initCardShelf(themePath, themeConfig, theme, elem, name);
