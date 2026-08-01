@@ -411,6 +411,8 @@ void rmDrawPixmapBlend(GSTEXTURE *txt, int x, int y, short aligned, int w, int h
     rm_quad_t quad;
     rmSetupQuad(txt, x, y, aligned, w, h, scaled, color, &quad);
 
+    const u8 savedATE = gsGlobal->Test->ATE;
+
     gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
     gsKit_set_test(gsGlobal, GS_ATEST_OFF);
 
@@ -421,6 +423,8 @@ void rmDrawPixmapBlend(GSTEXTURE *txt, int x, int y, short aligned, int w, int h
                               quad.br.x + fRenderXOff, quad.br.y + fRenderYOff,
                               quad.br.u, quad.br.v, order, quad.color);
     order++;
+
+    gsKit_set_test(gsGlobal, savedATE ? GS_ATEST_ON : GS_ATEST_OFF);
 }
 
 /* Vertical gradient. One gouraud quad: the GS interpolates the colour across
@@ -451,6 +455,7 @@ void rmDrawFrosted(int x, int y, int w, int h, u64 tint)
     float fh = Y_SCALE(h);
 
     GSTEXTURE *blur = rmBlurTexture();
+    const u8 savedATE = gsGlobal->Test->ATE;
 
     if (blur) {
         // The chain holds the whole framebuffer, reduced. So a framebuffer
@@ -484,6 +489,9 @@ void rmDrawFrosted(int x, int y, int w, int h, u64 tint)
     gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
     gsKit_prim_sprite(gsGlobal, fx, fy, fx + fw, fy + fh, order, tint);
     order++;
+
+    // The alpha test is global state; restore whatever the caller had.
+    gsKit_set_test(gsGlobal, savedATE ? GS_ATEST_ON : GS_ATEST_OFF);
 }
 
 void rmDrawLine(int x1, int y1, int x2, int y2, u64 color)

@@ -216,6 +216,8 @@ void rmBlurBackdrop(void)
        channel is a single bit whose value we do not control. Off it goes,
        along with the alpha test, which would otherwise reject texels. */
     const int savedAlpha = gsGlobal->PrimAlphaEnable;
+    const u8 savedATE = gsGlobal->Test->ATE;
+
     gsGlobal->PrimAlphaEnable = GS_SETTING_OFF;
     gsKit_set_test(gsGlobal, GS_ATEST_OFF);
     gsKit_set_clamp(gsGlobal, GS_CMODE_CLAMP); /* offsets must not wrap the edges */
@@ -242,7 +244,12 @@ void rmBlurBackdrop(void)
 
     rmBlurRestoreScreen();
 
+    /* Put back everything that was touched. The alpha test in particular: it is
+       global state, so leaving it off here would silently disable it for every
+       primitive drawn afterwards in the frame -- and the caller has no reason
+       to suspect that drawing a backdrop changed how its own quads are tested. */
     gsKit_set_clamp(gsGlobal, GS_CMODE_REPEAT);
+    gsKit_set_test(gsGlobal, savedATE ? GS_ATEST_ON : GS_ATEST_OFF);
     gsGlobal->PrimAlphaEnable = savedAlpha;
 }
 
