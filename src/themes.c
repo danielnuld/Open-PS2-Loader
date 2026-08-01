@@ -982,10 +982,20 @@ static void validateBackgroundElems(const char *themePath, config_set_t *themeCo
     }
 }
 
-static void validateItemsList(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_element_t *list, theme_elems_t *mainElems)
+/* `list` is the theme's gamesItemsList / appsItemsList slot, and it is taken by
+   ADDRESS on purpose: when no ItemsList is declared, the default built here has
+   to be written back into it. menusys.c reads
+
+       ((items_list_t *)gTheme->itemsList->extended)->displayedItems
+
+   with no NULL check, from menuNextV/menuPrevV/menuNextH/menuPrevH -- so a slot
+   left NULL is a null dereference on the first press of the D-pad, which on the
+   EE is an unhandled exception, i.e. a hard freeze. Splicing the element into
+   mainElems is not enough; the slot is a separate pointer. */
+static void validateItemsList(const char *themePath, config_set_t *themeConfig, theme_t *theme, theme_element_t **list, theme_elems_t *mainElems)
 {
-    if (list) {
-        items_list_t *itemsList = (items_list_t *)list->extended;
+    if (*list) {
+        items_list_t *itemsList = (items_list_t *)(*list)->extended;
         if (itemsList->decorator) {
             // Second pass to find the decorator
             theme_element_t *decoratorElem = mainElems->first;
@@ -1006,10 +1016,14 @@ static void validateItemsList(const char *themePath, config_set_t *themeConfig, 
         }
     } else {
         LOG("THEMES No itemsList found, adding a default one\n");
-        list = initBasic(themePath, themeConfig, theme, "il", ELEM_TYPE_ITEMS_LIST, 42, 42, ALIGN_NONE, 373, 316, SCALING_RATIO, theme->textColor, theme->fonts[0]);
-        initItemsList(themePath, themeConfig, theme, list, "il", NULL);
-        list->next = mainElems->first->next; // Position the itemsList as second element (right after the Background)
-        mainElems->first->next = list;
+        theme_element_t *elem = initBasic(themePath, themeConfig, theme, "il", ELEM_TYPE_ITEMS_LIST, 42, 42, ALIGN_NONE, 373, 316, SCALING_RATIO, theme->textColor, theme->fonts[0]);
+        initItemsList(themePath, themeConfig, theme, elem, "il", NULL);
+        elem->next = mainElems->first->next; // Position the itemsList as second element (right after the Background)
+        mainElems->first->next = elem;
+
+        // The slot menusys.c dereferences. Without this the theme renders, and
+        // then freezes the moment the user moves the selection.
+        *list = elem;
     }
 }
 
@@ -1020,8 +1034,8 @@ static void validateGUIElems(const char *themePath, config_set_t *themeConfig, t
     validateBackgroundElems(themePath, themeConfig, theme, &theme->appsMainElems, &theme->appsInfoElems);
 
     // 2. check we have a valid ItemsList element, and link its decorator to the target element
-    validateItemsList(themePath, themeConfig, theme, theme->gamesItemsList, &theme->mainElems);
-    validateItemsList(themePath, themeConfig, theme, theme->appsItemsList, &theme->appsMainElems);
+    validateItemsList(themePath, themeConfig, theme, &theme->gamesItemsList, &theme->mainElems);
+    validateItemsList(themePath, themeConfig, theme, &theme->appsItemsList, &theme->appsMainElems);
 }
 
 // FrostedPanel /////////////////////////////////////////////////////////////////////////////////////////////////////////////
