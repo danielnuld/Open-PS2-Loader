@@ -137,12 +137,38 @@ El supuesto de la fase 7 («no hay consola y no la va a haber») dejó de valers
 - [x] 7c.2 **El estante se centra en el foco.** Antes la página arrancaba pegada al borde izquierdo y con pocos juegos dejaba un hueco enorme a la derecha. Ahora la fila se desliza para que la tarjeta enfocada quede en el centro del estante, usando el foco **animado**, así que se desplaza en vez de saltar.
 - [x] 7c.3 **Izquierda/derecha recorre los juegos.** Un `CardShelf` reparte los items en X, así que `theme->horizontalItems` invierte los ejes de la cruceta en `menuHandleInputMain()`: izquierda/derecha camina la lista y arriba/abajo cambia de dispositivo. Los temas sin estante conservan el mapeo original.
 - [x] 7c.4 **Iconos de botones monocromos.** Los internos de OPL son los de PS2: rellenos y con código de color. Los de PlayStation moderna son contornos blancos. `themes/PS5/make_icons.py` los genera (círculo, cruz, triángulo, cuadrado, más *Create* y *Options*), dibujados a 8× y reducidos con LANCZOS porque OPL los pinta a unos 20 px en un CRT.
+- [x] 7c.5 **El logo del juego, sin escribir código.** OPL arma la ruta del arte como `<ART>/<serial>_<patrón>.png` (`bdmsupport.c:587`) y `GameImage` ya lee un `_pattern`, así que `pattern=LGO` carga el `_LGO.png` del juego tal cual. Va centrado a 252×105 y con `scaled=0`, para que no se le aplique la corrección de aspecto y salga deformado.
+- [x] 7c.6 **`ItemTitle`: el nombre del juego, no el serial.** `ItemText` dibuja `itemGetStartup()` —`SLUS_203.28`— y eso es deliberado en upstream: hay temas que cuentan con ello, así que no se toca. `ItemTitle` es el tipo nuevo y saca la cadena legible. Va centrado arriba, en Titillium a 30 px.
+- [x] 7c.7 **`hover_color`: la fila seleccionada en los diálogos.** `diaDrawBoundingBox()` pintaba la barra de la fila *seleccionada* con `textColor` —el mismo color que el texto del cuerpo— y reservaba `selTextColor` para el estado de edición; sobre el plasma, las dos eran casi iguales. Los dos estados salen ahora de una clave de tema nueva y se separan por **densidad** (`0x58` seleccionada, `0x78` editando). Opcional: sin `hover_color`, `dia.c` toma la rama de siempre y ningún tema existente cambia.
+- [x] 7c.8 **Los colores de texto NO son sRGB, y esto costó varias vueltas.** El GS modula la textura del glifo con `(texel * color) >> 7`, así que el **neutro es `0x80`**, no `0xFF`: por encima de 128 el color *aclara* y, como los glifos ya son blancos, satura. Por eso `#e8e8f0` y `#ffffff` se veían idénticos y no había forma de distinguir la entrada activa en los menús —que es lo único que las separa (`menusys.c:781`)—. Ni `#9aa0b4` valía: sigue por encima del neutro. El texto normal baja a `#5a6070`; medido en pantalla, la fila activa sale a 253,253,253 y el resto a 178,190,221.
+- [x] 7c.9 **El cristal se queda a pantalla completa.** Se probó como banda (de `y=190` hacia abajo) para dejar el fondo nítido en la mitad superior, y **se descartó**: deja un corte horizontal duro que parte el arte y queda peor que el desenfoque general. El tinte baja a 30 para que pase más color. Esto corrige lo que decía 7c.1, escrito cuando el panel aún era una franja.
+- [x] 7c.10 **Pantalla de información eliminada** del tema, a petición. Sin elementos `infoN`, `opl.c:235` no añade la pista y `opl.c:313` no conmuta de pantalla.
 
-## 7. Medición final — ❌ NO LA PODEMOS HACER
+## 7-quater. Banco de pruebas en PCSX2 — ✅ MONTADO
 
-**No hay consola física, y no la va a haber.** El plan original decía «no se pasa a la siguiente fase sin que la anterior corra en hardware real». Esa condición ya no se puede cumplir, así que hay que decir con qué se sustituye en vez de fingir que sigue pendiente.
+Se puede iterar sobre la composición sin tocar la consola. El bucle es: editar el `.cfg`, inyectarlo en una imagen USB, arrancar, capturar y medir.
 
-**Lo que sí se cerró sin hardware:**
+- [x] 7q.1 **USB emulado, no HDD.** El HDD por DEV9 **no funciona**: `dev9: unknown dev9 hardware` → `HDD: No HardDisk Drive detected`, y no lo arregla ni una BIOS *fat* (v1.90 SCPH-50001) ni `HddEnable`/`EthEnable`. El **USB mass storage sí**. La clave del ini es la que cuesta encontrar, porque `USB::GetConfigString()` antepone el `TypeName()` al nombre del ajuste:
+
+  ```ini
+  [USB1]
+  Type = Msd
+  Subtype = 0
+  Msd_ImagePathMsd = <ruta>\imagen.raw
+  ```
+
+  La imagen es un disco crudo: MBR + una partición FAT32 (tipo 0x0c) con la misma estructura que la USB física. OPL la monta solo (`BDM: usb0p1 mounted to fatfs`), aunque tarda ~22 s en enumerar.
+- [x] 7q.2 **Los ISO pueden ser ficheros vacíos.** `isValidIsoName()` (`supportbase.c:61`) saca el serial del **nombre** cuando sigue el formato `XXXX_XXX.XX.Nombre.iso`, sin abrir el archivo. Dos `truncate -s 8M` con el nombre correcto bastan para que la lista exista y el arte se resuelva. Los juegos así no arrancan; sirven para ver la interfaz.
+- [x] 7q.3 **Leer los `LOG()` de OPL.** Con `make DEBUG=1` y `EnableEEConsole = true` en el ini, la consola EE vuelca los `LOG()` al `emulog.txt` de PCSX2. Es lo que permitió localizar cada fallo de esta sesión sin adivinar.
+- [x] 7q.4 **Trampa de compilación, y costó una tarde.** Tras tocar una **cabecera** hay que hacer `make clean`. El Makefile genera dependencias con `-MMD -MP`, pero entre Windows y el contenedor Docker las marcas de tiempo no se comparan de forma fiable y `make` se salta módulos. Al añadir campos en medio de `theme_t`, `gui.o` y `opl.o` quedaron **horas** más viejos que `themes.h`, leyendo la estructura con los offsets antiguos: punteros basura y `memset` sobre la dirección 0 al arrancar. Ante cualquier cuelgue raro tras editar un `.h`, `make clean` **antes** de investigar nada.
+
+**Medido en el emulador con el overlay de DEBUG:** 59.9 fps, `1632 KiB TEXMAN` (la cadena reclama sus 224 KiB al primer panel de cristal) y el reescalador de portadas en **10 ms** por portada (frente a los 37 ms de la tarea 0.6, que se midieron sobre un 1024×512, mucho mayor que una portada real de 140×200).
+
+## 7. Medición final — PARCIALMENTE CERRADA
+
+> ⚠️ **Esta sección se escribió cuando no había consola.** Decía «no hay consola física, y no la va a haber». **Eso dejó de ser cierto el 2026-07-31**: el tema se probó en una PS2 real arrancando desde USB (ver 7-bis) y después en PCSX2 con USB emulado (7-quater). Se conserva el texto porque el razonamiento de las tareas 7.1–7.3 sigue valiendo, pero las premisas de 7.4–7.6 hay que releerlas con eso en mente.
+
+**Lo que se cerró sin hardware:**
 
 - [x] 7.1 **Presupuesto de relleno, calculado.** El relleno son píxeles escritos por frame; no depende de nada que PCSX2 falsee. La cadena de desenfoque cuesta **143,360 px = media pantalla**, o sea entre el **0.7% y el 1.7%** del presupuesto de un frame a 60 Hz según lo que se asuma que rinde el GS. El requisito de la spec (`<20%`) se cumple con un margen enorme. Ver design.md.
 - [x] 7.2 **VRAM, medida en PCSX2 y cuadrada con la teoría.** `1632 KiB TEXMAN` = `4096 − 2240 (framebuffers) − 224 (cadena)`. La VRAM sí es fiable en el emulador: es contabilidad de direcciones, no de rendimiento.
@@ -150,9 +176,11 @@ El supuesto de la fase 7 («no hay consola y no la va a haber») dejó de valers
 
 **Lo que queda genuinamente abierto, y hay que decirlo en la PR:**
 
-- [ ] 7.4 **Fps reales en consola.** El tema completo apila ≈6.1 pantallas de relleno por frame. Entre el 9% y el 21% del frame según lo que rinda de verdad el GS con bilineal y blending. **Esto no es el blur** —el blur es el 1.7%— **es la composición del tema.** Sólo se puede medir en hardware.
-- [ ] 7.5 **Thrashing del TexManager.** El conjunto de trabajo (~1 MiB) cabe en el pool encogido (1632 KiB) con holgura sobre el papel, pero re-subidas por DMA por frame se manifiestan como pérdida de fps, no como fallo visual. No se ve en PCSX2.
+- [ ] 7.4 **Fps reales en consola.** El tema completo apila ≈4.8 pantallas de relleno por frame (la cifra de 6.1 era de la composición anterior, que desenfocaba dos veces). Entre el 7% y el 17% del frame según lo que rinda de verdad el GS con bilineal y blending. **Esto no es el blur** —el blur es el 1.7%— **es la composición del tema.** En PCSX2 da 59.9 fps sostenidos, pero el emulador no modela el coste de relleno del GS, así que ese número **no vale como respuesta**.
+- [ ] 7.5 **Thrashing del TexManager.** El conjunto de trabajo cabe en el pool encogido (1632 KiB) con holgura, pero re-subidas por DMA por frame se manifiestan como pérdida de fps, no como fallo visual. No se ve en PCSX2.
 - [ ] 7.6 **PAL** (pool más estrecho: 1312 KiB) y **consolas FAT vs SLIM**.
+
+**Corrección de 0.5, medida sobre el arte real (2026-08-01):** el cálculo de VRAM del fondo estaba inflado ×4. El arte `_BG.png` del pack es **PNG de 8 bits paletizado**, y OPL lo carga como `GS_PSM_T8` (`textures.c:519`): **un byte por téxel** más una CLUT, no los cuatro que se habían supuesto asumiendo CT24. Alineado a página, un fondo de 640×480 cuesta **321 KiB, no 1.200**. Con el logo (`_LGO`, 300×125 RGBA = 160 KiB) y cuatro tarjetas (192 KiB), el residente ronda los **913 KiB de 1.632**: sobra de largo, y el crossfade —que llega a pedir dos fondos— tampoco desborda. **La advertencia sobre `_pattern=BG` que llevaba la PR era infundada.**
 
 ## 8. Upstream — PR en borrador, pidiendo testers
 
