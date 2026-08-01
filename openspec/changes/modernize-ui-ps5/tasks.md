@@ -87,7 +87,9 @@ Cada fase termina en algo verificable **en hardware real**, no sólo en PCSX2. E
   Hizo falta `rmDrawPixmapBlend()`: `rmDrawQuad` decide el alpha **según el formato** y sólo lo activa para CT32, así que un tile CT16 era literalmente imposible de fundir. La variante nueva fuerza el blending y deja que el alpha del color mande.
 
   **El crossfade guarda punteros a `GSTEXTURE`, no a items del menú.** Los `GSTEXTURE` de una caché viven lo que vive la caché; un item de submenú puede liberarse bajo tus pies cuando se reconstruye la lista de dispositivos. En el peor caso la entrada saliente se recicla a mitad del fundido y se mezcla el arte equivocado durante unos cientos de ms — pero nunca puede quedar colgado.
-- [x] 6.4 No es el tema por defecto: el usuario copia `themes/PS5/` a `<dispositivo>/THM/PS5/` y lo elige a mano.
+- [x] 6.4 No es el tema por defecto: el usuario copia `themes/PS5/` a **`<dispositivo>/THM/thm_PS5/`** y lo elige a mano.
+
+  **El prefijo `thm_` no es opcional.** `thmReadEntry()` (`themes.c:1553`) sólo considera tema un directorio cuyo nombre contiene `thm_`, y construye el nombre a mostrar desde `name + 4`. Una carpeta llamada `PS5` a secas se ignora en el escaneo: el tema no aparece en Ajustes y no hay ningún mensaje de error que lo explique. Con `thm_PS5`, el nombre que sale en la lista es `PS5`.
 
 **Verificable:** el tema PS5 seleccionable y usable de punta a punta.
 
@@ -118,6 +120,23 @@ Se adelantó al resto porque podía invalidar el diseño. Y lo hizo: ver `design
   Una portada real (512×720 ≈ 368k px, frente a 524k) sale proporcionalmente más barata.
 
   ⚠️ **Números de PCSX2, no de consola.** El emulador no modela fielmente la velocidad del EE y suele correr el código escalar *más rápido* que el hardware real, así que el filtro podría ser bastante más caro en una PS2 física. Da el orden de magnitud y confirma que la idea es viable; **no cierra la fase 7**. Si en hardware resultara caro, la salida obvia es muestrear el filtro cada 2 píxeles (4× más rápido, poca pérdida visible a 128×192).
+
+## 7-bis. Puesta en marcha en consola física — ✅ ARRANCA
+
+El supuesto de la fase 7 («no hay consola y no la va a haber») dejó de valerse: el tema se probó en una PS2 real sobre USB. Tres cuelgues duros seguidos, ninguno en el código nuevo de GS — los tres eran punteros nulos que el tema PS5 fue el primero en destapar.
+
+- [x] 7b.1 **La carpeta necesita el prefijo `thm_`.** `thmReadEntry()` (`themes.c:1553`) sólo reconoce como tema los directorios cuyo nombre lo lleva, y toma el nombre a mostrar desde `name + 4`. Sin él, el escaneo la ignora en silencio: el tema no sale en Ajustes y no hay ningún aviso. La tarea 6.4 decía `THM/PS5/` y estaba mal.
+- [x] 7b.2 **`validateItemsList()` no rellenaba el hueco del tema.** Fabricaba el `ItemsList` por defecto y lo enlazaba en `mainElems`, pero `list` era una copia por valor, así que `theme->gamesItemsList` seguía a NULL. `menusys.c:654` y cuatro sitios más leen `gTheme->itemsList->extended` sin comprobarlo, desde `menuNextV`/`menuPrevV`/`menuNextH`/`menuPrevH`. Ahora se pasa por dirección. **Fallo latente de upstream**: cualquier tema sin `ItemsList` cuelga OPL.
+- [x] 7b.3 **El culpable del cuelgue al seleccionar el tema: `use_default=0` sin traer imágenes.** Con ese flag `thmLoadResource()` no cae de vuelta al arte interno, así que las 40+ texturas quedan con `Mem = NULL` y `thmGetTexture()` devuelve NULL para todo. `guiAlignMenuHints()` y `guiAlignSubMenuHints()` (`gui.c`) lo desreferenciaban sin comprobar — y además dividían por `iconTex->Height`. Eran las **dos únicas** excepciones del código: el resto de sitios ya comprobaban. `diaRenderUI()` llama a la segunda, y la pantalla de Ajustes *es* un diálogo, así que el cuelgue ocurría en el mismo menú desde el que eliges el tema. Corregidas ambas, y el tema pasa a `use_default=1`.
+
+**Lo que sí funciona en hardware, confirmado en pantalla:** el tema carga, el `CardShelf` dibuja las tarjetas (portada real cuando hay `_COV`, placa con el título cuando no), el `ItemText`, el `HintText` y la composición general.
+
+## 7-ter. Ajustes tras verlo en la tele
+
+- [x] 7c.1 **El fondo ya no es la portada desenfocada.** Estirar un tile de 128×192 a 640×480 y desenfocarlo daba una mancha de color. `CoverWallpaper` gana `_pattern` (por defecto `BG`, el arte por juego a tamaño nativo) y `_blur` (por defecto 0). El desenfoque sólo tenía sentido mientras la fuente era una portada estirada 5×: con arte de pantalla completa, desenfocar tira justo el detalle que ese arte tiene. El cristal se queda donde le toca, en la franja del `FrostedPanel`. `_pattern=COV` recupera el comportamiento anterior y reactiva el blur solo.
+- [x] 7c.2 **El estante se centra en el foco.** Antes la página arrancaba pegada al borde izquierdo y con pocos juegos dejaba un hueco enorme a la derecha. Ahora la fila se desliza para que la tarjeta enfocada quede en el centro del estante, usando el foco **animado**, así que se desplaza en vez de saltar.
+- [x] 7c.3 **Izquierda/derecha recorre los juegos.** Un `CardShelf` reparte los items en X, así que `theme->horizontalItems` invierte los ejes de la cruceta en `menuHandleInputMain()`: izquierda/derecha camina la lista y arriba/abajo cambia de dispositivo. Los temas sin estante conservan el mapeo original.
+- [x] 7c.4 **Iconos de botones monocromos.** Los internos de OPL son los de PS2: rellenos y con código de color. Los de PlayStation moderna son contornos blancos. `themes/PS5/make_icons.py` los genera (círculo, cruz, triángulo, cuadrado, más *Create* y *Options*), dibujados a 8× y reducidos con LANCZOS porque OPL los pinta a unos 20 px en un CRT.
 
 ## 7. Medición final — ❌ NO LA PODEMOS HACER
 
